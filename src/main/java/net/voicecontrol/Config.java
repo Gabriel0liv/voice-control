@@ -39,6 +39,7 @@ public class Config {
         public final ForgeConfigSpec.BooleanValue resourcePackInternalHttpServer;
         public final ForgeConfigSpec.IntValue resourcePackHttpPort;
         public final ForgeConfigSpec.ConfigValue<String> resourcePackPublicUrl;
+        public final ForgeConfigSpec.BooleanValue resourcePackAllowLocalIpAutoDetect;
         public final ForgeConfigSpec.BooleanValue resourcePackRequired;
 
         public ServerConfig(ForgeConfigSpec.Builder builder) {
@@ -106,6 +107,9 @@ public class Config {
             resourcePackPublicUrl = builder
                     .comment("Public URL of the resource pack. If empty, the server attempts to detect client connection address.")
                     .define("publicUrl", "");
+            resourcePackAllowLocalIpAutoDetect = builder
+                    .comment("Allow automatic detection of local IP address if publicUrl is empty. If false, pushing without publicUrl will fail.")
+                    .define("allowLocalIpAutoDetect", false);
             resourcePackRequired = builder
                     .comment("Whether players are prompted/forced to download the resource pack to play")
                     .define("required", false);

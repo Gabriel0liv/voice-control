@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit;
 public class MonitorRecordingSession implements Runnable {
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-    private static final QueuedPacket POISON_PILL = new QueuedPacket(null, null);
+    private static final QueuedPacket POISON_PILL = new QueuedPacket(null, null, 0L);
 
     private final MinecraftServer server;
     private final UUID monitorUuid;
@@ -53,10 +53,12 @@ public class MonitorRecordingSession implements Runnable {
     private static class QueuedPacket {
         final UUID speakerUuid;
         final byte[] opusData;
+        final long timestampMs;
 
-        QueuedPacket(UUID speakerUuid, byte[] opusData) {
+        QueuedPacket(UUID speakerUuid, byte[] opusData, long timestampMs) {
             this.speakerUuid = speakerUuid;
             this.opusData = opusData;
+            this.timestampMs = timestampMs;
         }
     }
 
@@ -79,9 +81,10 @@ public class MonitorRecordingSession implements Runnable {
         String format = Config.SERVER.recordingDefaultFormat.get().toLowerCase();
         boolean requestMp3 = "mp3".equals(format);
 
-        // Mixed output file path
-        this.mixAudioFile = RecordingStorage.getMonitorFile(monitorNick, timestamp, requestMp3 ? "mp3" : "wav");
-        this.mixEncoder = new AudioEncoderWrapper(mixAudioFile, requestMp3);
+        // Mixed output base path
+        File baseFile = RecordingStorage.getMonitorFileBase(monitorNick, timestamp);
+        this.mixEncoder = new AudioEncoderWrapper(baseFile, requestMp3);
+        this.mixAudioFile = mixEncoder.getOutputFile();
 
         // Start worker thread
         this.workerThread = new Thread(this, "VoiceControl-MonRec-" + monitorNick);
@@ -97,7 +100,7 @@ public class MonitorRecordingSession implements Runnable {
                         if (soundPacket instanceof EntitySoundPacket) {
                             speaker = ((EntitySoundPacket) soundPacket).getEntityUuid();
                         }
-                        packetQueue.offer(new QueuedPacket(speaker, soundPacket.getOpusEncodedData()));
+                        packetQueue.offer(new QueuedPacket(speaker, soundPacket.getOpusEncodedData(), System.currentTimeMillis()));
                     })
                     .build();
             api.registerAudioListener(audioListener);
@@ -126,12 +129,12 @@ public class MonitorRecordingSession implements Runnable {
         }
 
         packetQueue.offer(POISON_PILL); // Signal worker to finish
-        try {
-            if (workerThread != null) {
+        if (workerThread != null && Thread.currentThread() != workerThread) {
+            try {
                 workerThread.join(5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
     }
 
@@ -173,7 +176,7 @@ public class MonitorRecordingSession implements Runnable {
     }
 
     private void processQueuedPacket(QueuedPacket qp) {
-        long packetTimeMs = System.currentTimeMillis();
+        long packetTimeMs = qp.timestampMs;
         long elapsedMs = packetTimeMs - startTimeMs;
         long targetSample = (elapsedMs * 48000) / 1000;
 
@@ -278,9 +281,9 @@ public class MonitorRecordingSession implements Runnable {
 
                 String format = Config.SERVER.recordingDefaultFormat.get().toLowerCase();
                 boolean requestMp3 = "mp3".equals(format);
-                File file = RecordingStorage.getSpeakerFile(monitorNick, speakerNick, timestamp, requestMp3 ? "mp3" : "wav");
+                File baseFile = RecordingStorage.getSpeakerFileBase(monitorNick, speakerNick, timestamp);
                 
-                return new SpeakerTrack(speakerNick, file, requestMp3);
+                return new SpeakerTrack(speakerNick, baseFile, requestMp3);
             } catch (IOException e) {
                 AdminLogger.error("SYSTEM", "Failed to create speaker track for " + uuid + ": " + e.getMessage());
                 return null;
@@ -338,7 +341,7 @@ public class MonitorRecordingSession implements Runnable {
 
         if (Config.SERVER.recordingSaveMetadata.get()) {
             File jsonFile = RecordingStorage.getMonitorMetadataFile(monitorNick, timestamp);
-            String formatStr = mixEncoder.isMp3() ? "mp3" : "wav";
+            String formatStr = mixEncoder.getFormatExtension();
             RecordingStorage.writeMetadata(
                     jsonFile,
                     "monitor",
@@ -388,10 +391,10 @@ public class MonitorRecordingSession implements Runnable {
         private final short[] buffer = new short[96000];
         private long startSample = 0;
 
-        SpeakerTrack(String nick, File file, boolean requestMp3) throws IOException {
+        SpeakerTrack(String nick, File baseFile, boolean requestMp3) throws IOException {
             this.nick = nick;
-            this.file = file;
-            this.encoder = new AudioEncoderWrapper(file, requestMp3);
+            this.encoder = new AudioEncoderWrapper(baseFile, requestMp3);
+            this.file = this.encoder.getOutputFile();
         }
 
         synchronized void mixAudio(long targetSample, short[] pcm) throws IOException {

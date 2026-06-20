@@ -133,7 +133,9 @@ dependencies {
     // then special handling is done to allow a setup of a vanilla dependency without the use of an external repository.
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
-    compileOnly "de.maxhenkel.voicechat:voicechat-api:2.6.0"
+    // We use implementation instead of compileOnly to ensure that the dependencies are fully resolved
+    // and indexed in development environments like VS Code, which solves "The import de cannot be resolved".
+    implementation "de.maxhenkel.voicechat:voicechat-api:2.6.19"
 
     // Example mod dependency with JEI - using fg.deobf() ensures the dependency is remapped to your development mappings
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime

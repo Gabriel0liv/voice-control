@@ -4,8 +4,23 @@ A server-side only Minecraft Forge mod that integrates with **Simple Voice Chat*
 
 ---
 
-## 🛠️ Instalação
+## 🛠️ Compilação e Instalação
 
+### Compilando o Mod
+Para compilar e gerar o arquivo `.jar` do mod a partir do código-fonte:
+
+No Linux/macOS:
+```bash
+./gradlew clean build
+```
+
+No Windows:
+```powershell
+.\gradlew.bat clean build
+```
+O arquivo `.jar` compilado será gerado em `build/libs/`.
+
+### Instalação no Servidor
 1. Cole o arquivo `.jar` gerado na pasta `mods/` do seu servidor Forge 1.20.1.
 2. Certifique-se de que o mod **Simple Voice Chat** esteja instalado tanto no servidor quanto nos clientes que desejam falar e ouvir.
 3. Inicie o servidor para gerar as pastas de trabalho e o arquivo de configuração.
@@ -87,7 +102,7 @@ Se o seu servidor Minecraft possui um IP público ou domínio, você deve config
 ```toml
 publicUrl = "http://meuserver.com:8087/voicecontrol-pack.zip"
 ```
-Se deixado em branco, o mod tentará utilizar a detecção automática baseada no IP de rede local da máquina host.
+Por padrão, se `publicUrl` estiver vazio, o comando `/voicectl pack push` irá falhar com um erro. Se você deseja forçar a detecção automática baseada no IP de rede local do servidor (por exemplo, em ambiente de teste local), defina `allowLocalIpAutoDetect = true` no arquivo de configuração do servidor.
 
 ---
 
@@ -137,8 +152,10 @@ O arquivo é gerado no diretório `config/` do seu servidor:
     internalHttpServer = true
     # Porta do servidor HTTP interno
     httpPort = 8087
-    # URL de download pública do resource pack (deixe em branco para auto-detecção)
+    # URL de download pública do resource pack (obrigatório para push, a menos que allowLocalIpAutoDetect seja true)
     publicUrl = ""
+    # Permitir auto-detecção do IP local se a publicUrl estiver vazia (útil em testes locais, mas não recomendado para produção)
+    allowLocalIpAutoDetect = false
     # Se os jogadores devem obrigatoriamente instalar o pacote para jogar
     required = false
 ```
@@ -151,12 +168,12 @@ O arquivo é gerado no diretório `config/` do seu servidor:
 {
   "boss_fala_1": {
     "sounds": [
-      "voicecontrol:boss_fala_1"
+      "boss_fala_1"
     ]
   },
   "evento_intro": {
     "sounds": [
-      "voicecontrol:evento_intro"
+      "evento_intro"
     ]
   }
 }
@@ -164,8 +181,8 @@ O arquivo é gerado no diretório `config/` do seu servidor:
 
 ---
 
-## ⚠️ Limitações Conhecidas
+## ⚠️ Limitações Conhecidas e Status Experimental
 
 1. **Dependência do FFmpeg para Transcodificação**: O Java nativo não possui codificadores de OGG Vorbis internos. O mod busca a chamada `ffmpeg` no PATH do sistema. Sem ele instalado no servidor host, apenas arquivos `.ogg` pré-convertidos colocados manualmente serão aceitos na pasta `imported-audios`.
 2. **Natives do LAME MP3**: O codificador de MP3 integrado usa a biblioteca nativa `Lame4J` provida pelo Simple Voice Chat. Em plataformas host raras ou não suportadas (como servidores baseados em processadores ARM antigos ou sem GLIBC atualizados no Linux), a inicialização do codificador MP3 pode falhar com erros JNI. O mod detecta e ativa o fallback automático para áudio bruto **WAV** sem travar o servidor.
-3. **Multi-Track do Monitor**: O modo monitor mixa todos os participantes ouvidos em tempo real utilizando um buffer deslizante de PCM. O áudio mixado preserva o posicionamento estéreo e a distância dos players. As faixas de speakers individuais criam arquivos por falante perfeitamente sincronizados no tempo através da inserção automática de silêncios durante as pausas de fala.
+3. **Status Experimental do Modo Monitor**: A gravação em modo monitor (`/voicectl rec monitor`) é considerada **experimental** até testes reais massivos com múltiplos players. Dependendo da taxa de atualização e limitações da API do Simple Voice Chat, pode haver variações ou pequenos atrasos de sincronização, distância/posicionamento e na identificação individual dos falantes.

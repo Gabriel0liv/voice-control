@@ -22,15 +22,15 @@ public class AudioEncoderWrapper {
     private int wavDataSize = 0;
     private boolean closed = false;
 
-    public AudioEncoderWrapper(File outputFile, boolean requestMp3) throws IOException {
-        this.outputFile = outputFile;
+    public AudioEncoderWrapper(File baseFile, boolean requestMp3) throws IOException {
         boolean mp3Success = false;
-        
+        File mp3File = new File(baseFile.getPath() + ".mp3");
+
         if (requestMp3) {
             try {
                 VoicechatServerApi api = VoiceControlVoicePlugin.getServerApi();
                 if (api != null) {
-                    this.outputStream = new BufferedOutputStream(new FileOutputStream(outputFile));
+                    this.outputStream = new BufferedOutputStream(new FileOutputStream(mp3File));
                     // 48000 Hz, 16 bits, Mono, signed=true, bigEndian=false
                     AudioFormat format = new AudioFormat(48000.0f, 16, 1, true, false);
                     this.mp3Encoder = api.createMp3Encoder(format, 128000, 2, this.outputStream);
@@ -38,6 +38,9 @@ public class AudioEncoderWrapper {
                         mp3Success = true;
                     } else {
                         this.outputStream.close();
+                        if (mp3File.exists()) {
+                            mp3File.delete();
+                        }
                     }
                 }
             } catch (Throwable t) {
@@ -45,18 +48,32 @@ public class AudioEncoderWrapper {
                 if (this.outputStream != null) {
                     try { this.outputStream.close(); } catch (IOException ignored) {}
                 }
+                if (mp3File.exists()) {
+                    mp3File.delete();
+                }
             }
         }
 
         if (mp3Success) {
             this.useMp3 = true;
+            this.outputFile = mp3File;
         } else {
             this.useMp3 = false;
             this.mp3Encoder = null;
             // Set up WAV writing
-            this.outputStream = new BufferedOutputStream(new FileOutputStream(outputFile));
+            File wavFile = new File(baseFile.getPath() + ".wav");
+            this.outputFile = wavFile;
+            this.outputStream = new BufferedOutputStream(new FileOutputStream(wavFile));
             RecordingStorage.writeWavHeader(this.outputStream, 0);
         }
+    }
+
+    public File getOutputFile() {
+        return outputFile;
+    }
+
+    public String getFormatExtension() {
+        return useMp3 ? "mp3" : "wav";
     }
 
     public synchronized void write(short[] pcmData) throws IOException {

@@ -46,7 +46,9 @@ public class ResourcePackBuilder {
         } catch (IOException e) {
             String msg = "Failed to write pack.mcmeta: " + e.getMessage();
             AdminLogger.error(operator, msg);
-            if (source != null) source.sendFailure(Component.literal("§c" + msg));
+            if (source != null) {
+                server.execute(() -> source.sendFailure(Component.literal("§c" + msg)));
+            }
             return;
         }
 
@@ -58,8 +60,8 @@ public class ResourcePackBuilder {
         Map<String, Map<String, Object>> soundsJson = new HashMap<>();
         for (String soundId : AudioImportManager.getImportedSounds().keySet()) {
             Map<String, Object> soundEntry = new HashMap<>();
-            // The sound identifier in list defaults to mapping "namespace:soundId" -> assets/namespace/sounds/soundId.ogg
-            soundEntry.put("sounds", Collections.singletonList(namespace + ":" + soundId));
+            // The sound identifier in list defaults to mapping "soundId" -> assets/namespace/sounds/soundId.ogg
+            soundEntry.put("sounds", Collections.singletonList(soundId));
             soundsJson.put(soundId, soundEntry);
         }
 
@@ -68,7 +70,9 @@ public class ResourcePackBuilder {
         } catch (IOException e) {
             String msg = "Failed to write sounds.json: " + e.getMessage();
             AdminLogger.error(operator, msg);
-            if (source != null) source.sendFailure(Component.literal("§c" + msg));
+            if (source != null) {
+                server.execute(() -> source.sendFailure(Component.literal("§c" + msg)));
+            }
             return;
         }
 
@@ -81,7 +85,9 @@ public class ResourcePackBuilder {
         } catch (IOException e) {
             String msg = "Failed to zip resource pack: " + e.getMessage();
             AdminLogger.error(operator, msg);
-            if (source != null) source.sendFailure(Component.literal("§c" + msg));
+            if (source != null) {
+                server.execute(() -> source.sendFailure(Component.literal("§c" + msg)));
+            }
             return;
         }
 
@@ -92,7 +98,7 @@ public class ResourcePackBuilder {
         String successMsg = "Resource pack built successfully! File: " + outputZip.getName() + " | SHA-1: " + packSha1;
         AdminLogger.info(operator, successMsg);
         if (source != null) {
-            source.sendSystemMessage(Component.literal("§a" + successMsg));
+            server.execute(() -> source.sendSystemMessage(Component.literal("§a" + successMsg)));
         }
     }
 

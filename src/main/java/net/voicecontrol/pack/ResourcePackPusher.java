@@ -35,6 +35,12 @@ public class ResourcePackPusher {
 
         String url = Config.SERVER.resourcePackPublicUrl.get().trim();
         if (url.isEmpty()) {
+            if (!Config.SERVER.resourcePackAllowLocalIpAutoDetect.get()) {
+                String errorMsg = "resourcePack.publicUrl is empty. Configure a public URL in config/voicecontrol-server.toml before pushing the resource pack.";
+                AdminLogger.error(operator, errorMsg);
+                if (source != null) source.sendFailure(Component.literal("§c" + errorMsg));
+                return;
+            }
             try {
                 String ip = InetAddress.getLocalHost().getHostAddress();
                 int port = Config.SERVER.resourcePackHttpPort.get();

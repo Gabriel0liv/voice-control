@@ -21,6 +21,30 @@ import java.util.UUID;
 public class RecordingStorage {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
+    public static File getMicFileBase(String playerNick, String timestamp) {
+        Path path = VoiceControlMod.getBaseFolder().resolve("recordings/players/" + playerNick);
+        try {
+            Files.createDirectories(path);
+        } catch (IOException ignored) {}
+        return path.resolve(timestamp + "_mic").toFile();
+    }
+
+    public static File getMonitorFileBase(String monitorNick, String timestamp) {
+        Path path = VoiceControlMod.getBaseFolder().resolve("recordings/monitors/" + monitorNick);
+        try {
+            Files.createDirectories(path);
+        } catch (IOException ignored) {}
+        return path.resolve(timestamp + "_monitor_mix").toFile();
+    }
+
+    public static File getSpeakerFileBase(String monitorNick, String speakerNick, String timestamp) {
+        Path path = VoiceControlMod.getBaseFolder().resolve("recordings/monitors/" + monitorNick + "/speakers/" + speakerNick);
+        try {
+            Files.createDirectories(path);
+        } catch (IOException ignored) {}
+        return path.resolve(timestamp + "_seen-by-" + monitorNick).toFile();
+    }
+
     public static File getMicFile(String playerNick, String timestamp, String format) {
         Path path = VoiceControlMod.getBaseFolder().resolve("recordings/players/" + playerNick);
         try {

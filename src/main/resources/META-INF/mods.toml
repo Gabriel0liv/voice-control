@@ -68,11 +68,11 @@ description='''${mod_description}'''
 
 # Dependency on Simple Voice Chat
 [[dependencies.${mod_id}]]
-    modId="voicechat"
+    modId="voicechat_api"
     mandatory=true
     versionRange="[2.6.0,)"
-    ordering="NONE"
-    side="SERVER"
+    ordering="AFTER"
+    side="BOTH"
 
 # Features are specific properties of the game environment, that you may want to declare you require. This example declares
 # that your mod requires GL version 3.2 or higher. Other features will be added. They are side aware so declaring this won't

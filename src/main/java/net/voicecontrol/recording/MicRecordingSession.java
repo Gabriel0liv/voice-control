@@ -59,11 +59,12 @@ public class MicRecordingSession implements Runnable {
         String format = Config.SERVER.recordingDefaultFormat.get().toLowerCase();
         boolean requestMp3 = "mp3".equals(format);
         
-        // Output file path
-        this.audioFile = RecordingStorage.getMicFile(playerNick, timestamp, requestMp3 ? "mp3" : "wav");
+        // Output base path without extension
+        File baseFile = RecordingStorage.getMicFileBase(playerNick, timestamp);
         
-        // Initialize encoder (will fall back to WAV if MP3 is unavailable)
-        this.encoder = new AudioEncoderWrapper(audioFile, requestMp3);
+        // Initialize encoder (will fall back to WAV if MP3 is unavailable and resolve file name)
+        this.encoder = new AudioEncoderWrapper(baseFile, requestMp3);
+        this.audioFile = encoder.getOutputFile();
 
         // Start worker thread
         this.workerThread = new Thread(this, "VoiceControl-MicRec-" + playerNick);
@@ -94,12 +95,12 @@ public class MicRecordingSession implements Runnable {
         running = false;
         stoppedTimeMs = System.currentTimeMillis();
         packetQueue.offer(POISON_PILL); // Signal worker to finish
-        try {
-            if (workerThread != null) {
+        if (workerThread != null && Thread.currentThread() != workerThread) {
+            try {
                 workerThread.join(5000); // Wait up to 5 seconds for finalization
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
     }
 
@@ -164,7 +165,7 @@ public class MicRecordingSession implements Runnable {
 
         if (Config.SERVER.recordingSaveMetadata.get()) {
             File jsonFile = RecordingStorage.getMicMetadataFile(playerNick, timestamp);
-            String formatStr = encoder.isMp3() ? "mp3" : "wav";
+            String formatStr = encoder.getFormatExtension();
             RecordingStorage.writeMetadata(
                     jsonFile,
                     "mic",

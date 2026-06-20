@@ -3,7 +3,7 @@ package net.voicecontrol.audio;
 public class Sanitizer {
     public static String sanitize(String filename) {
         if (filename == null || filename.isEmpty()) {
-            return "sound_" + System.currentTimeMillis();
+            return "";
         }
         
         // Remove file extension
@@ -22,10 +22,6 @@ public class Sanitizer {
         }
         while (sanitized.endsWith("_") || sanitized.endsWith("-")) {
             sanitized = sanitized.substring(0, sanitized.length() - 1);
-        }
-        
-        if (sanitized.isEmpty()) {
-            sanitized = "sound_" + System.currentTimeMillis();
         }
         
         return sanitized;
