@@ -2,6 +2,8 @@ package net.voicecontrol;
 
 import net.minecraftforge.common.ForgeConfigSpec;
 import org.apache.commons.lang3.tuple.Pair;
+import java.util.List;
+import java.util.Arrays;
 
 public class Config {
     public static final ForgeConfigSpec SPEC;
@@ -23,24 +25,39 @@ public class Config {
         public final ForgeConfigSpec.BooleanValue recordingAutoStopOnDisconnect;
         public final ForgeConfigSpec.BooleanValue recordingAutoRecordNewPlayersWhenAll;
         public final ForgeConfigSpec.IntValue recordingMaxRecordingMinutes;
+        public final ForgeConfigSpec.BooleanValue recordingOrganizeByDateAndSession;
+        public final ForgeConfigSpec.ConfigValue<String> recordingDateFolderPattern;
+        public final ForgeConfigSpec.ConfigValue<String> recordingSessionFolderPattern;
 
         // Command configurations
         public final ForgeConfigSpec.IntValue commandsPermissionLevel;
 
-        // Audio Import configurations
-        public final ForgeConfigSpec.BooleanValue audioImportEnabled;
-        public final ForgeConfigSpec.ConfigValue<String> audioImportInputFolder;
-        public final ForgeConfigSpec.ConfigValue<String> audioImportNamespace;
-        public final ForgeConfigSpec.BooleanValue audioImportConvertToOgg;
+        // Audio Library configurations
+        public final ForgeConfigSpec.BooleanValue audioLibraryEnabled;
+        public final ForgeConfigSpec.ConfigValue<String> audioLibraryImportFolder;
+        public final ForgeConfigSpec.BooleanValue audioLibraryAllowMp3WavTranscode;
+        public final ForgeConfigSpec.ConfigValue<String> audioLibraryFfmpegPath;
+        public final ForgeConfigSpec.BooleanValue audioLibrarySyncOnPlayerJoin;
+        public final ForgeConfigSpec.BooleanValue audioLibrarySyncOnAudioReload;
+        public final ForgeConfigSpec.IntValue audioLibraryMaxChunkSizeBytes;
+        public final ForgeConfigSpec.IntValue audioLibraryMaxAudioFileSizeMb;
+        public final ForgeConfigSpec.ConfigValue<List<? extends String>> audioLibraryAllowedExtensions;
 
-        // Resource pack configurations
-        public final ForgeConfigSpec.BooleanValue resourcePackEnabled;
-        public final ForgeConfigSpec.BooleanValue resourcePackAutoBuildOnReload;
-        public final ForgeConfigSpec.BooleanValue resourcePackInternalHttpServer;
-        public final ForgeConfigSpec.IntValue resourcePackHttpPort;
-        public final ForgeConfigSpec.ConfigValue<String> resourcePackPublicUrl;
-        public final ForgeConfigSpec.BooleanValue resourcePackAllowLocalIpAutoDetect;
-        public final ForgeConfigSpec.BooleanValue resourcePackRequired;
+        // Dynamic Sound configurations
+        public final ForgeConfigSpec.BooleanValue dynamicSoundEnabled;
+        public final ForgeConfigSpec.BooleanValue dynamicSoundClientCacheEnabled;
+        public final ForgeConfigSpec.DoubleValue dynamicSoundDefaultVolume;
+        public final ForgeConfigSpec.DoubleValue dynamicSoundDefaultPitch;
+        public final ForgeConfigSpec.IntValue dynamicSoundMaxConcurrentSounds;
+        public final ForgeConfigSpec.BooleanValue dynamicSoundPreloadOnJoin;
+        public final ForgeConfigSpec.BooleanValue dynamicSoundPlayAfterDownloadIfMissing;
+
+        // Voice Playback configurations
+        public final ForgeConfigSpec.BooleanValue voicePlaybackEnabled;
+        public final ForgeConfigSpec.IntValue voicePlaybackDefaultDistance;
+        public final ForgeConfigSpec.DoubleValue voicePlaybackDefaultVolume;
+        public final ForgeConfigSpec.IntValue voicePlaybackMaxDurationSeconds;
+        public final ForgeConfigSpec.BooleanValue voicePlaybackPreDecodePcmOnReload;
 
         public ServerConfig(ForgeConfigSpec.Builder builder) {
             builder.push("recording");
@@ -68,6 +85,15 @@ public class Config {
             recordingMaxRecordingMinutes = builder
                     .comment("Maximum recording duration in minutes (0 to disable limit)")
                     .defineInRange("maxRecordingMinutes", 60, 0, 1440);
+            recordingOrganizeByDateAndSession = builder
+                    .comment("Organize recordings by date and session directories")
+                    .define("organizeByDateAndSession", true);
+            recordingDateFolderPattern = builder
+                    .comment("Pattern for the date subfolder name")
+                    .define("dateFolderPattern", "dd-MM-yyyy");
+            recordingSessionFolderPattern = builder
+                    .comment("Pattern for the session subfolder name")
+                    .define("sessionFolderPattern", "dd-MM-yyyy_HH-mm-ss");
             builder.pop();
 
             builder.push("commands");
@@ -76,43 +102,76 @@ public class Config {
                     .defineInRange("permissionLevel", 3, 0, 4);
             builder.pop();
 
-            builder.push("audioImport");
-            audioImportEnabled = builder
-                    .comment("Enable custom audio import feature")
+            builder.push("audioLibrary");
+            audioLibraryEnabled = builder
+                    .comment("Enable custom audio library features")
                     .define("enabled", true);
-            audioImportInputFolder = builder
-                    .comment("Folder relative to server root containing audios to import")
-                    .define("inputFolder", "voice-control/imported-audios");
-            audioImportNamespace = builder
-                    .comment("ResourceLocation namespace to use for registered sound events")
-                    .define("namespace", "voicecontrol");
-            audioImportConvertToOgg = builder
-                    .comment("Whether to automatically convert imported mp3/wav to ogg format using ffmpeg")
-                    .define("convertToOgg", true);
+            audioLibraryImportFolder = builder
+                    .comment("Folder containing custom audio to import")
+                    .define("importFolder", "voice-control/imported-audios");
+            audioLibraryAllowMp3WavTranscode = builder
+                    .comment("Allow automatic transcoding of wav/mp3 to ogg using ffmpeg")
+                    .define("allowMp3WavTranscode", true);
+            audioLibraryFfmpegPath = builder
+                    .comment("Optional path to ffmpeg executable (leave empty to search in system path)")
+                    .define("ffmpegPath", "");
+            audioLibrarySyncOnPlayerJoin = builder
+                    .comment("Sync audio manifest to players when they join")
+                    .define("syncOnPlayerJoin", true);
+            audioLibrarySyncOnAudioReload = builder
+                    .comment("Sync audio manifest to players on reload")
+                    .define("syncOnAudioReload", true);
+            audioLibraryMaxChunkSizeBytes = builder
+                    .comment("Maximum chunk size in bytes for sync packet transfer")
+                    .defineInRange("maxChunkSizeBytes", 32768, 1024, 1048576);
+            audioLibraryMaxAudioFileSizeMb = builder
+                    .comment("Maximum allowed audio file size in megabytes")
+                    .defineInRange("maxAudioFileSizeMb", 20, 1, 500);
+            audioLibraryAllowedExtensions = builder
+                    .comment("List of allowed extensions for audio import")
+                    .defineList("allowedExtensions", Arrays.asList("ogg", "wav", "mp3"), s -> s instanceof String);
             builder.pop();
 
-            builder.push("resourcePack");
-            resourcePackEnabled = builder
-                    .comment("Enable generation of server resource pack for imported audios")
-                    .define("resourcePackEnabled", true);
-            resourcePackAutoBuildOnReload = builder
-                    .comment("Automatically rebuild resource pack ZIP file on reload")
-                    .define("autoBuildOnReload", true);
-            resourcePackInternalHttpServer = builder
-                    .comment("Serve the built resource pack using a built-in HTTP server")
-                    .define("internalHttpServer", true);
-            resourcePackHttpPort = builder
-                    .comment("Port for the internal HTTP server")
-                    .defineInRange("httpPort", 8087, 1, 65535);
-            resourcePackPublicUrl = builder
-                    .comment("Public URL of the resource pack. If empty, the server attempts to detect client connection address.")
-                    .define("publicUrl", "");
-            resourcePackAllowLocalIpAutoDetect = builder
-                    .comment("Allow automatic detection of local IP address if publicUrl is empty. If false, pushing without publicUrl will fail.")
-                    .define("allowLocalIpAutoDetect", false);
-            resourcePackRequired = builder
-                    .comment("Whether players are prompted/forced to download the resource pack to play")
-                    .define("required", false);
+            builder.push("dynamicSound");
+            dynamicSoundEnabled = builder
+                    .comment("Enable dynamic sound play engine")
+                    .define("enabled", true);
+            dynamicSoundClientCacheEnabled = builder
+                    .comment("Enable client caching of synchronized audios")
+                    .define("clientCacheEnabled", true);
+            dynamicSoundDefaultVolume = builder
+                    .comment("Default volume for played sounds")
+                    .defineInRange("defaultVolume", 1.0, 0.0, 10.0);
+            dynamicSoundDefaultPitch = builder
+                    .comment("Default pitch for played sounds")
+                    .defineInRange("defaultPitch", 1.0, 0.5, 2.0);
+            dynamicSoundMaxConcurrentSounds = builder
+                    .comment("Maximum concurrent playing dynamic sounds on client")
+                    .defineInRange("maxConcurrentSounds", 32, 1, 128);
+            dynamicSoundPreloadOnJoin = builder
+                    .comment("Pre-download all manifest sounds on join (not recommended for large libraries)")
+                    .define("preloadOnJoin", false);
+            dynamicSoundPlayAfterDownloadIfMissing = builder
+                    .comment("Play a sound immediately after downloading if it was requested but missing")
+                    .define("playAfterDownloadIfMissing", true);
+            builder.pop();
+
+            builder.push("voicePlayback");
+            voicePlaybackEnabled = builder
+                    .comment("Enable playback of sounds over simple voice chat")
+                    .define("enabled", true);
+            voicePlaybackDefaultDistance = builder
+                    .comment("Default voice distance for locational playback")
+                    .defineInRange("defaultDistance", 48, 1, 1000);
+            voicePlaybackDefaultVolume = builder
+                    .comment("Default volume for voice chat playback")
+                    .defineInRange("defaultVolume", 1.0, 0.0, 10.0);
+            voicePlaybackMaxDurationSeconds = builder
+                    .comment("Maximum duration in seconds for voice chat playback")
+                    .defineInRange("maxDurationSeconds", 120, 1, 3600);
+            voicePlaybackPreDecodePcmOnReload = builder
+                    .comment("Pre-decode and cache PCM data for voice playback on reload")
+                    .define("preDecodePcmOnReload", false);
             builder.pop();
         }
     }

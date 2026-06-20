@@ -4,7 +4,6 @@ import de.maxhenkel.voicechat.api.VoicechatServerApi;
 import de.maxhenkel.voicechat.api.audiolistener.PlayerAudioListener;
 import de.maxhenkel.voicechat.api.opus.OpusDecoder;
 import de.maxhenkel.voicechat.api.packets.EntitySoundPacket;
-import de.maxhenkel.voicechat.api.packets.SoundPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.voicecontrol.Config;
@@ -14,23 +13,24 @@ import net.voicecontrol.logging.AdminLogger;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 public class MonitorRecordingSession implements Runnable {
-    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
-    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-    private static final QueuedPacket POISON_PILL = new QueuedPacket(null, null, 0L);
+    private static final byte[] POISON_PILL = new byte[0];
+    private static final DateTimeFormatter DISPLAY_FORMATTER = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss");
 
     private final MinecraftServer server;
     private final UUID monitorUuid;
     private final String monitorNick;
     private final String startedBy;
-    private final String startedAtIso;
-    private final String timestamp;
+    private final LocalDateTime startDateTime;
     private final long startTimeMs;
 
     private final LinkedBlockingQueue<QueuedPacket> packetQueue = new LinkedBlockingQueue<>();
@@ -38,8 +38,8 @@ public class MonitorRecordingSession implements Runnable {
     private final File mixAudioFile;
     
     // Multi-speaker tracking
-    private final Map<UUID, OpusDecoder> decoders = new HashMap<>();
-    private final Map<UUID, SpeakerTrack> speakerTracks = new HashMap<>();
+    private final Map<UUID, OpusDecoder> decoders = new ConcurrentHashMap<>();
+    private final Map<UUID, SpeakerTrack> speakerTracks = new ConcurrentHashMap<>();
 
     // Real-time mixing sliding window buffer (2 seconds)
     private final short[] mixedBuffer = new short[96000];
@@ -68,10 +68,7 @@ public class MonitorRecordingSession implements Runnable {
         this.monitorNick = monitorNick;
         this.startedBy = startedBy;
         this.startTimeMs = System.currentTimeMillis();
-
-        LocalDateTime now = LocalDateTime.now();
-        this.timestamp = now.format(DATE_TIME_FORMATTER);
-        this.startedAtIso = now.format(ISO_FORMATTER);
+        this.startDateTime = LocalDateTime.now();
 
         VoicechatServerApi api = VoiceControlVoicePlugin.getServerApi();
         if (api == null) {
@@ -81,8 +78,8 @@ public class MonitorRecordingSession implements Runnable {
         String format = Config.SERVER.recordingDefaultFormat.get().toLowerCase();
         boolean requestMp3 = "mp3".equals(format);
 
-        // Mixed output base path
-        File baseFile = RecordingStorage.getMonitorFileBase(monitorNick, timestamp);
+        // Mixed output base path using LocalDateTime
+        File baseFile = RecordingStorage.getMonitorFileBase(monitorNick, startDateTime);
         this.mixEncoder = new AudioEncoderWrapper(baseFile, requestMp3);
         this.mixAudioFile = mixEncoder.getOutputFile();
 
@@ -106,7 +103,7 @@ public class MonitorRecordingSession implements Runnable {
             api.registerAudioListener(audioListener);
         } catch (Throwable t) {
             this.running = false;
-            packetQueue.offer(POISON_PILL);
+            packetQueue.offer(new QueuedPacket(null, POISON_PILL, 0L));
             throw new IOException("Failed to build/register PlayerAudioListener: " + t.getMessage(), t);
         }
 
@@ -128,7 +125,7 @@ public class MonitorRecordingSession implements Runnable {
             }
         }
 
-        packetQueue.offer(POISON_PILL); // Signal worker to finish
+        packetQueue.offer(new QueuedPacket(null, POISON_PILL, 0L)); // Signal worker to finish
         if (workerThread != null && Thread.currentThread() != workerThread) {
             try {
                 workerThread.join(5000);
@@ -150,7 +147,7 @@ public class MonitorRecordingSession implements Runnable {
                     continue;
                 }
 
-                if (qp == POISON_PILL) {
+                if (qp.opusData == POISON_PILL) {
                     break;
                 }
 
@@ -160,7 +157,6 @@ public class MonitorRecordingSession implements Runnable {
                     long elapsedMs = System.currentTimeMillis() - startTimeMs;
                     if (elapsedMs >= (long) maxMinutes * 60 * 1000) {
                         AdminLogger.info("SYSTEM", "Monitor recording for " + monitorNick + " hit maximum duration limit. Auto-stopping.");
-                        // Stop will trigger poison pill
                         stop();
                         break;
                     }
@@ -183,7 +179,6 @@ public class MonitorRecordingSession implements Runnable {
         // Get or create decoder for speaker
         UUID speakerUuid = qp.speakerUuid;
         if (speakerUuid == null) {
-            // If sender not specified, use a dummy UUID to decode it as ambient
             speakerUuid = new UUID(0, 0);
         }
 
@@ -200,22 +195,19 @@ public class MonitorRecordingSession implements Runnable {
             // 1. Mix into mixed track
             mixAudio(targetSample, pcm);
 
-            // 2. Write to speaker-specific track if speaker is real
-            if (!speakerUuid.equals(new UUID(0, 0))) {
-                SpeakerTrack track = getOrCreateSpeakerTrack(speakerUuid);
-                if (track != null) {
-                    track.mixAudio(targetSample, pcm);
-                }
+            // 2. Write to speaker-specific track
+            SpeakerTrack track = getOrCreateSpeakerTrack(speakerUuid);
+            if (track != null) {
+                track.mixAudio(targetSample, pcm);
             }
         } catch (Exception e) {
-            AdminLogger.error("SYSTEM", "Error processing monitored packet: " + e.getMessage());
+            AdminLogger.error("SYSTEM", "Error processing queued packet in monitor recording: " + e.getMessage());
         }
     }
 
     private synchronized void mixAudio(long targetSample, short[] pcm) throws IOException {
         long neededEnd = targetSample + pcm.length;
         if (neededEnd > bufferStartSample + mixedBuffer.length) {
-            // Slide buffer to accommodate the new packet
             long newStart = neededEnd - mixedBuffer.length;
             slideBufferTo(newStart);
         }
@@ -237,11 +229,9 @@ public class MonitorRecordingSession implements Runnable {
         if (slideAmount <= 0) return;
 
         if (slideAmount >= mixedBuffer.length) {
-            // Write entire buffer
             mixEncoder.write(mixedBuffer);
             Arrays.fill(mixedBuffer, (short) 0);
 
-            // Write extra silence directly
             long extraSilence = slideAmount - mixedBuffer.length;
             if (extraSilence > 0) {
                 short[] silence = new short[48000];
@@ -257,12 +247,10 @@ public class MonitorRecordingSession implements Runnable {
             }
             bufferStartSample = newStartSample;
         } else {
-            // Write the first slideAmount samples
             short[] toWrite = new short[(int) slideAmount];
             System.arraycopy(mixedBuffer, 0, toWrite, 0, (int) slideAmount);
             mixEncoder.write(toWrite);
 
-            // Shift left
             System.arraycopy(mixedBuffer, (int) slideAmount, mixedBuffer, 0, (int) (mixedBuffer.length - slideAmount));
             Arrays.fill(mixedBuffer, (int) (mixedBuffer.length - slideAmount), mixedBuffer.length, (short) 0);
             
@@ -281,9 +269,9 @@ public class MonitorRecordingSession implements Runnable {
 
                 String format = Config.SERVER.recordingDefaultFormat.get().toLowerCase();
                 boolean requestMp3 = "mp3".equals(format);
-                File baseFile = RecordingStorage.getSpeakerFileBase(monitorNick, speakerNick, timestamp);
+                File baseFile = RecordingStorage.getSpeakerFileBase(monitorNick, speakerNick, startDateTime);
                 
-                return new SpeakerTrack(speakerNick, baseFile, requestMp3);
+                return new SpeakerTrack(uuid, speakerNick, baseFile, requestMp3);
             } catch (IOException e) {
                 AdminLogger.error("SYSTEM", "Failed to create speaker track for " + uuid + ": " + e.getMessage());
                 return null;
@@ -292,15 +280,12 @@ public class MonitorRecordingSession implements Runnable {
     }
 
     private void cleanup() {
-        // Stop audio listener connection
         long actualStoppedTime = stoppedTimeMs > 0 ? stoppedTimeMs : System.currentTimeMillis();
         long elapsedMs = actualStoppedTime - startTimeMs;
         long endSample = (elapsedMs * 48000) / 1000;
 
         try {
-            // Slide mixer buffer to end sample to write all remaining data
             slideBufferTo(endSample);
-            // Write remaining buffer data
             mixEncoder.write(mixedBuffer);
         } catch (IOException e) {
             AdminLogger.error("SYSTEM", "Error flushing mix buffer: " + e.getMessage());
@@ -319,19 +304,30 @@ public class MonitorRecordingSession implements Runnable {
             AdminLogger.error("SYSTEM", "Error closing mix encoder: " + e.getMessage());
         }
 
-        // Close speaker tracks
-        for (SpeakerTrack track : speakerTracks.values()) {
-            track.close(endSample);
-        }
-        speakerTracks.clear();
+        LocalDateTime stopDateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(actualStoppedTime), ZoneId.systemDefault());
+
+        String startedAtIso = Instant.ofEpochMilli(startTimeMs).toString();
+        String stoppedAtIso = Instant.ofEpochMilli(actualStoppedTime).toString();
+        String startedAtDisplay = startDateTime.format(DISPLAY_FORMATTER);
+        String stoppedAtDisplay = stopDateTime.format(DISPLAY_FORMATTER);
+        
+        String datePattern = Config.SERVER.recordingDateFolderPattern.get();
+        String sessionPattern = Config.SERVER.recordingSessionFolderPattern.get();
+        String dateFolder = startDateTime.format(DateTimeFormatter.ofPattern(datePattern));
+        String sessionFolder = startDateTime.format(DateTimeFormatter.ofPattern(sessionPattern));
 
         double durationSeconds = elapsedMs / 1000.0;
-        String stoppedAtIso = LocalDateTime.now().format(ISO_FORMATTER);
+
+        // Close speaker tracks
+        for (SpeakerTrack track : speakerTracks.values()) {
+            track.close(endSample, actualStoppedTime, startedAtIso, stoppedAtIso, startedAtDisplay, stoppedAtDisplay, dateFolder, sessionFolder, durationSeconds);
+        }
+        speakerTracks.clear();
 
         String sha256 = "";
         if (Config.SERVER.recordingSaveHash.get()) {
             sha256 = RecordingStorage.calculateSHA256(mixAudioFile);
-            File hashFile = RecordingStorage.getMonitorHashFile(monitorNick, timestamp, "sha256");
+            File hashFile = new File(mixAudioFile.getParentFile(), "monitor.sha256");
             try (FileWriter fw = new FileWriter(hashFile)) {
                 fw.write(sha256);
             } catch (IOException e) {
@@ -340,8 +336,17 @@ public class MonitorRecordingSession implements Runnable {
         }
 
         if (Config.SERVER.recordingSaveMetadata.get()) {
-            File jsonFile = RecordingStorage.getMonitorMetadataFile(monitorNick, timestamp);
+            File jsonFile = new File(mixAudioFile.getParentFile(), "monitor.json");
             String formatStr = mixEncoder.getFormatExtension();
+
+            String relativeFilePath = "";
+            try {
+                relativeFilePath = net.minecraftforge.fml.loading.FMLPaths.GAMEDIR.get().toAbsolutePath()
+                        .relativize(mixAudioFile.toPath().toAbsolutePath()).toString().replace('\\', '/');
+            } catch (Exception e) {
+                relativeFilePath = mixAudioFile.getPath().replace('\\', '/');
+            }
+
             RecordingStorage.writeMetadata(
                     jsonFile,
                     "monitor",
@@ -352,8 +357,13 @@ public class MonitorRecordingSession implements Runnable {
                     startedBy,
                     startedAtIso,
                     stoppedAtIso,
+                    startedAtDisplay,
+                    stoppedAtDisplay,
+                    dateFolder,
+                    sessionFolder,
                     durationSeconds,
                     formatStr,
+                    relativeFilePath,
                     mixAudioFile.getAbsolutePath(),
                     sha256
             );
@@ -384,14 +394,16 @@ public class MonitorRecordingSession implements Runnable {
     }
 
     // Helper class for speaker tracks
-    private static class SpeakerTrack {
+    private class SpeakerTrack {
+        private final UUID uuid;
         private final String nick;
         private final File file;
         private final AudioEncoderWrapper encoder;
         private final short[] buffer = new short[96000];
         private long startSample = 0;
 
-        SpeakerTrack(String nick, File baseFile, boolean requestMp3) throws IOException {
+        SpeakerTrack(UUID uuid, String nick, File baseFile, boolean requestMp3) throws IOException {
+            this.uuid = uuid;
             this.nick = nick;
             this.encoder = new AudioEncoderWrapper(baseFile, requestMp3);
             this.file = this.encoder.getOutputFile();
@@ -450,13 +462,60 @@ public class MonitorRecordingSession implements Runnable {
             }
         }
 
-        synchronized void close(long endSample) {
+        synchronized void close(long endSample, long actualStoppedTime, String startedAtIso, String stoppedAtIso, String startedAtDisplay, String stoppedAtDisplay, String dateFolder, String sessionFolder, double durationSeconds) {
             try {
                 slideBufferTo(endSample);
                 encoder.write(buffer);
                 encoder.close();
             } catch (IOException e) {
                 AdminLogger.error("SYSTEM", "Failed to close speaker track for " + nick + ": " + e.getMessage());
+            }
+
+            // Write speaker hash
+            String sha256 = "";
+            if (Config.SERVER.recordingSaveHash.get()) {
+                sha256 = RecordingStorage.calculateSHA256(file);
+                File hashFile = new File(file.getParentFile(), "seen-by-monitor.sha256");
+                try (FileWriter fw = new FileWriter(hashFile)) {
+                    fw.write(sha256);
+                } catch (IOException e) {
+                    AdminLogger.error("SYSTEM", "Failed to write speaker SHA-256 hash file: " + e.getMessage());
+                }
+            }
+
+            // Write speaker metadata
+            if (Config.SERVER.recordingSaveMetadata.get()) {
+                File jsonFile = new File(file.getParentFile(), "seen-by-monitor.json");
+                String formatStr = encoder.getFormatExtension();
+
+                String relativeFilePath = "";
+                try {
+                    relativeFilePath = net.minecraftforge.fml.loading.FMLPaths.GAMEDIR.get().toAbsolutePath()
+                            .relativize(file.toPath().toAbsolutePath()).toString().replace('\\', '/');
+                } catch (Exception e) {
+                    relativeFilePath = file.getPath().replace('\\', '/');
+                }
+
+                RecordingStorage.writeMetadata(
+                        jsonFile,
+                        "speaker",
+                        null,
+                        monitorNick,
+                        uuid,
+                        nick,
+                        startedBy,
+                        startedAtIso,
+                        stoppedAtIso,
+                        startedAtDisplay,
+                        stoppedAtDisplay,
+                        dateFolder,
+                        sessionFolder,
+                        durationSeconds,
+                        formatStr,
+                        relativeFilePath,
+                        file.getAbsolutePath(),
+                        sha256
+                );
             }
         }
     }

@@ -9,22 +9,22 @@ import net.voicecontrol.logging.AdminLogger;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 public class MicRecordingSession implements Runnable {
-    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
-    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final byte[] POISON_PILL = new byte[0];
+    private static final DateTimeFormatter DISPLAY_FORMATTER = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss");
 
     private final UUID playerUuid;
     private final String playerNick;
     private final String startedBy;
-    private final String startedAtIso;
-    private final String timestamp;
+    private final LocalDateTime startDateTime;
     private final long startTimeMs;
 
     private final LinkedBlockingQueue<byte[]> packetQueue = new LinkedBlockingQueue<>();
@@ -41,10 +41,7 @@ public class MicRecordingSession implements Runnable {
         this.playerNick = playerNick;
         this.startedBy = startedBy;
         this.startTimeMs = System.currentTimeMillis();
-        
-        LocalDateTime now = LocalDateTime.now();
-        this.timestamp = now.format(DATE_TIME_FORMATTER);
-        this.startedAtIso = now.format(ISO_FORMATTER);
+        this.startDateTime = LocalDateTime.now();
 
         VoicechatServerApi api = VoiceControlVoicePlugin.getServerApi();
         if (api == null) {
@@ -59,8 +56,8 @@ public class MicRecordingSession implements Runnable {
         String format = Config.SERVER.recordingDefaultFormat.get().toLowerCase();
         boolean requestMp3 = "mp3".equals(format);
         
-        // Output base path without extension
-        File baseFile = RecordingStorage.getMicFileBase(playerNick, timestamp);
+        // Output base path without extension using LocalDateTime
+        File baseFile = RecordingStorage.getMicFileBase(playerNick, startDateTime);
         
         // Initialize encoder (will fall back to WAV if MP3 is unavailable and resolve file name)
         this.encoder = new AudioEncoderWrapper(baseFile, requestMp3);
@@ -150,12 +147,23 @@ public class MicRecordingSession implements Runnable {
 
         long actualStoppedTime = stoppedTimeMs > 0 ? stoppedTimeMs : System.currentTimeMillis();
         double durationSeconds = (actualStoppedTime - startTimeMs) / 1000.0;
-        String stoppedAtIso = LocalDateTime.now().format(ISO_FORMATTER);
+        
+        LocalDateTime stopDateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(actualStoppedTime), ZoneId.systemDefault());
+        
+        String startedAtIso = Instant.ofEpochMilli(startTimeMs).toString();
+        String stoppedAtIso = Instant.ofEpochMilli(actualStoppedTime).toString();
+        String startedAtDisplay = startDateTime.format(DISPLAY_FORMATTER);
+        String stoppedAtDisplay = stopDateTime.format(DISPLAY_FORMATTER);
+        
+        String datePattern = Config.SERVER.recordingDateFolderPattern.get();
+        String sessionPattern = Config.SERVER.recordingSessionFolderPattern.get();
+        String dateFolder = startDateTime.format(DateTimeFormatter.ofPattern(datePattern));
+        String sessionFolder = startDateTime.format(DateTimeFormatter.ofPattern(sessionPattern));
 
         String sha256 = "";
         if (Config.SERVER.recordingSaveHash.get()) {
             sha256 = RecordingStorage.calculateSHA256(audioFile);
-            File hashFile = RecordingStorage.getMicHashFile(playerNick, timestamp, "sha256");
+            File hashFile = new File(audioFile.getParentFile(), "mic.sha256");
             try (FileWriter fw = new FileWriter(hashFile)) {
                 fw.write(sha256);
             } catch (IOException e) {
@@ -164,8 +172,18 @@ public class MicRecordingSession implements Runnable {
         }
 
         if (Config.SERVER.recordingSaveMetadata.get()) {
-            File jsonFile = RecordingStorage.getMicMetadataFile(playerNick, timestamp);
+            File jsonFile = new File(audioFile.getParentFile(), "mic.json");
             String formatStr = encoder.getFormatExtension();
+            
+            // Relativize path from Game Directory
+            String relativeFilePath = "";
+            try {
+                relativeFilePath = net.minecraftforge.fml.loading.FMLPaths.GAMEDIR.get().toAbsolutePath()
+                        .relativize(audioFile.toPath().toAbsolutePath()).toString().replace('\\', '/');
+            } catch (Exception e) {
+                relativeFilePath = audioFile.getPath().replace('\\', '/');
+            }
+
             RecordingStorage.writeMetadata(
                     jsonFile,
                     "mic",
@@ -176,8 +194,13 @@ public class MicRecordingSession implements Runnable {
                     startedBy,
                     startedAtIso,
                     stoppedAtIso,
+                    startedAtDisplay,
+                    stoppedAtDisplay,
+                    dateFolder,
+                    sessionFolder,
                     durationSeconds,
                     formatStr,
+                    relativeFilePath,
                     audioFile.getAbsolutePath(),
                     sha256
             );

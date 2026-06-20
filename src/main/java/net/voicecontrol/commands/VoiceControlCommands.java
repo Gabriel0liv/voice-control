@@ -1,27 +1,52 @@
 package net.voicecontrol.commands;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.FloatArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.commands.arguments.ResourceLocationArgument;
+import net.minecraft.commands.arguments.coordinates.Vec3Argument;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.Vec3;
 import net.voicecontrol.Config;
 import net.voicecontrol.audio.AudioImportManager;
-import net.voicecontrol.pack.ResourcePackBuilder;
-import net.voicecontrol.pack.ResourcePackPusher;
-import net.voicecontrol.pack.ResourcePackServer;
+import net.voicecontrol.audio.VoiceChatPlaybackEngine;
+import net.voicecontrol.network.VoiceControlNetwork;
+import net.voicecontrol.network.packets.DynamicSoundPlayPacket;
 import net.voicecontrol.recording.MicRecordingSession;
 import net.voicecontrol.recording.MonitorRecordingSession;
 import net.voicecontrol.recording.RecordingManager;
-
-import java.io.File;
-import java.net.InetAddress;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
 public class VoiceControlCommands {
+
+    public static final SuggestionProvider<CommandSourceStack> SUGGEST_SOUNDS = (context, builder) -> {
+        List<String> list = new ArrayList<>();
+        for (String key : AudioImportManager.getImportedSounds().keySet()) {
+            list.add(key); // voicecontrol:teste1
+            if (key.startsWith("voicecontrol:")) {
+                list.add(key.substring("voicecontrol:".length())); // teste1
+            }
+        }
+        return SharedSuggestionProvider.suggest(list, builder);
+    };
+
+    public static final SuggestionProvider<CommandSourceStack> SUGGEST_SOURCES = (context, builder) -> {
+        return SharedSuggestionProvider.suggest(List.of("master", "music", "record", "weather", "block", "hostile", "neutral", "player", "ambient", "voice"), builder);
+    };
+
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(
             Commands.literal("voicectl")
@@ -69,30 +94,119 @@ public class VoiceControlCommands {
                         .executes(context -> listAudio(context.getSource()))
                     )
                     .then(Commands.literal("info")
-                        .then(Commands.argument("name", StringArgumentType.string())
-                            .executes(context -> infoAudio(context.getSource(), StringArgumentType.getString(context, "name")))
+                        .then(Commands.argument("sound", ResourceLocationArgument.id())
+                            .suggests(SUGGEST_SOUNDS)
+                            .executes(context -> infoAudio(context.getSource(), ResourceLocationArgument.getId(context, "sound")))
+                        )
+                    )
+                    .then(Commands.literal("sync")
+                        .then(Commands.literal("all")
+                            .executes(context -> syncAudioAll(context.getSource()))
+                        )
+                        .then(Commands.argument("player", EntityArgument.players())
+                            .executes(context -> syncAudioPlayer(context.getSource(), EntityArgument.getPlayers(context, "player")))
                         )
                     )
                 )
-                .then(Commands.literal("pack")
-                    .then(Commands.literal("build")
-                        .executes(context -> buildPack(context.getSource()))
+                .then(Commands.literal("playsound")
+                    .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
+                        .then(Commands.argument("source", StringArgumentType.word()).suggests(SUGGEST_SOURCES)
+                            .then(Commands.argument("targets", EntityArgument.players())
+                                .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), null, null, null, null))
+                                .then(Commands.argument("pos", Vec3Argument.vec3())
+                                    .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), null, null, null))
+                                    .then(Commands.argument("volume", FloatArgumentType.floatArg(0.0f))
+                                        .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), null, null))
+                                        .then(Commands.argument("pitch", FloatArgumentType.floatArg(0.5f, 2.0f))
+                                            .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), FloatArgumentType.getFloat(context, "pitch"), null))
+                                            .then(Commands.argument("minVolume", FloatArgumentType.floatArg(0.0f, 1.0f))
+                                                .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), FloatArgumentType.getFloat(context, "pitch"), FloatArgumentType.getFloat(context, "minVolume")))
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                        )
                     )
-                    .then(Commands.literal("push")
-                        .executes(context -> pushPack(context.getSource()))
+                )
+                .then(Commands.literal("voiceplay")
+                    .then(Commands.literal("stop")
+                        .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
+                            .executes(context -> stopVoicePlay(context.getSource(), ResourceLocationArgument.getId(context, "sound")))
+                        )
                     )
-                    .then(Commands.literal("status")
-                        .executes(context -> packStatus(context.getSource()))
+                    .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
+                        .then(Commands.argument("targets", EntityArgument.players())
+                            .executes(context -> playVoiceStatic(context.getSource(), ResourceLocationArgument.getId(context, "sound"), EntityArgument.getPlayers(context, "targets")))
+                        )
+                        .then(Commands.literal("at")
+                            .then(Commands.argument("pos", Vec3Argument.vec3())
+                                .executes(context -> playVoiceLocational(context.getSource(), ResourceLocationArgument.getId(context, "sound"), Vec3Argument.getVec3(context, "pos")))
+                            )
+                        )
+                        .then(Commands.literal("from")
+                            .then(Commands.argument("entity", EntityArgument.entity())
+                                .executes(context -> playVoiceEntity(context.getSource(), ResourceLocationArgument.getId(context, "sound"), EntityArgument.getEntity(context, "entity")))
+                            )
+                        )
+                        .then(Commands.literal("as")
+                            .then(Commands.argument("player", EntityArgument.player())
+                                .then(Commands.literal("from")
+                                    .then(Commands.argument("entity", EntityArgument.entity())
+                                        .executes(context -> playVoiceAsPlayer(context.getSource(), ResourceLocationArgument.getId(context, "sound"), EntityArgument.getPlayer(context, "player"), EntityArgument.getEntity(context, "entity")))
+                                    )
+                                )
+                            )
+                        )
                     )
                 )
         );
+
+        // Alias /vcplaysound
+        dispatcher.register(
+            Commands.literal("vcplaysound")
+                .requires(source -> source.hasPermission(Config.SERVER.commandsPermissionLevel.get()))
+                .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
+                    .then(Commands.argument("source", StringArgumentType.word()).suggests(SUGGEST_SOURCES)
+                        .then(Commands.argument("targets", EntityArgument.players())
+                            .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), null, null, null, null))
+                            .then(Commands.argument("pos", Vec3Argument.vec3())
+                                .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), null, null, null))
+                                .then(Commands.argument("volume", FloatArgumentType.floatArg(0.0f))
+                                    .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), null, null))
+                                    .then(Commands.argument("pitch", FloatArgumentType.floatArg(0.5f, 2.0f))
+                                        .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), FloatArgumentType.getFloat(context, "pitch"), null))
+                                        .then(Commands.argument("minVolume", FloatArgumentType.floatArg(0.0f, 1.0f))
+                                            .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), FloatArgumentType.getFloat(context, "pitch"), FloatArgumentType.getFloat(context, "minVolume")))
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+        );
+    }
+
+    private static String resolveSoundId(ResourceLocation location) {
+        String id = location.toString();
+        if (AudioImportManager.getImportedSounds().containsKey(id)) {
+            return id;
+        }
+        if ("minecraft".equals(location.getNamespace())) {
+            String fallbackId = "voicecontrol:" + location.getPath();
+            if (AudioImportManager.getImportedSounds().containsKey(fallbackId)) {
+                return fallbackId;
+            }
+        }
+        return null;
     }
 
     private static int startMicPlayer(CommandSourceStack source, ServerPlayer target) {
         String operator = source.getTextName();
         boolean success = RecordingManager.startMicRecording(target, operator);
         if (success) {
-            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação do microfone de " + target.getGameProfile().getName() + " iniciada."), true);
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação do microfone de " + target.getGameProfile().getName() + " iniciada."), false);
         } else {
             source.sendFailure(Component.literal("§c[VoiceControl] Falha ao iniciar gravação (já gravando ou gravação desativada)."));
         }
@@ -102,14 +216,14 @@ public class VoiceControlCommands {
     private static int startMicAll(CommandSourceStack source) {
         String operator = source.getTextName();
         RecordingManager.startAllMicRecording(source.getServer(), operator);
-        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação de microfone iniciada para todos os jogadores."), true);
+        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação de microfone iniciada para todos os jogadores."), false);
         return 1;
     }
 
     private static int stopMicPlayer(CommandSourceStack source, ServerPlayer target) {
         boolean success = RecordingManager.stopMicRecording(target);
         if (success) {
-            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação do microfone de " + target.getGameProfile().getName() + " interrompida."), true);
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação do microfone de " + target.getGameProfile().getName() + " interrompida."), false);
         } else {
             source.sendFailure(Component.literal("§c[VoiceControl] O jogador " + target.getGameProfile().getName() + " não estava sendo gravado."));
         }
@@ -119,7 +233,7 @@ public class VoiceControlCommands {
     private static int stopMicAll(CommandSourceStack source) {
         String operator = source.getTextName();
         RecordingManager.stopAllMicRecording(source.getServer(), operator);
-        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação de microfone interrompida para todos os jogadores."), true);
+        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação de microfone interrompida para todos os jogadores."), false);
         return 1;
     }
 
@@ -127,7 +241,7 @@ public class VoiceControlCommands {
         String operator = source.getTextName();
         boolean success = RecordingManager.startMonitorRecording(source.getServer(), target, operator);
         if (success) {
-            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação monitorada para " + target.getGameProfile().getName() + " iniciada."), true);
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação monitorada para " + target.getGameProfile().getName() + " iniciada."), false);
         } else {
             source.sendFailure(Component.literal("§c[VoiceControl] Falha ao iniciar gravação monitorada (já monitorando ou gravação desativada)."));
         }
@@ -137,7 +251,7 @@ public class VoiceControlCommands {
     private static int stopMonitorPlayer(CommandSourceStack source, ServerPlayer target) {
         boolean success = RecordingManager.stopMonitorRecording(target);
         if (success) {
-            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação monitorada para " + target.getGameProfile().getName() + " interrompida."), true);
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Gravação monitorada para " + target.getGameProfile().getName() + " interrompida."), false);
         } else {
             source.sendFailure(Component.literal("§c[VoiceControl] O jogador " + target.getGameProfile().getName() + " não possui uma sessão monitorada ativa."));
         }
@@ -167,76 +281,162 @@ public class VoiceControlCommands {
     }
 
     private static int listAudio(CommandSourceStack source) {
-        Map<String, File> sounds = AudioImportManager.getImportedSounds();
-        String namespace = Config.SERVER.audioImportNamespace.get().toLowerCase();
+        Map<String, AudioImportManager.AudioEntry> sounds = AudioImportManager.getImportedSounds();
         
         if (sounds.isEmpty()) {
             source.sendSystemMessage(Component.literal("§e[VoiceControl] Nenhum áudio importado disponível. Coloque arquivos em 'voice-control/imported-audios/' e execute '/voicectl audio reload'."));
         } else {
             source.sendSystemMessage(Component.literal("§6=== Áudios Importados Disponíveis (" + sounds.size() + ") ==="));
             for (String soundId : sounds.keySet()) {
-                source.sendSystemMessage(Component.literal("§a - " + namespace + ":" + soundId));
+                source.sendSystemMessage(Component.literal("§a - " + soundId));
             }
         }
         return 1;
     }
 
-    private static int infoAudio(CommandSourceStack source, String name) {
-        // Strip namespace if present
-        String targetName = name;
-        String namespace = Config.SERVER.audioImportNamespace.get().toLowerCase();
-        if (name.startsWith(namespace + ":")) {
-            targetName = name.substring(namespace.length() + 1);
-        }
-
-        Map<String, File> sounds = AudioImportManager.getImportedSounds();
-        File file = sounds.get(targetName);
-        if (file == null || !file.exists()) {
-            source.sendFailure(Component.literal("§c[VoiceControl] Áudio '" + name + "' não encontrado. Certifique-se de que ele foi registrado via '/voicectl audio reload'."));
+    private static int infoAudio(CommandSourceStack source, ResourceLocation soundLoc) {
+        String soundId = resolveSoundId(soundLoc);
+        if (soundId == null) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Áudio '" + soundLoc + "' não encontrado na biblioteca."));
             return 1;
         }
 
-        source.sendSystemMessage(Component.literal("§6=== Informações do Áudio: " + namespace + ":" + targetName + " ==="));
-        source.sendSystemMessage(Component.literal("§eNome do arquivo: §a" + file.getName()));
-        source.sendSystemMessage(Component.literal("§eCaminho físico: §a" + file.getAbsolutePath()));
-        source.sendSystemMessage(Component.literal("§eTamanho: §a" + file.length() + " bytes"));
-        
-        // Calculate SHA-1 for the sounds
-        String sha1 = ResourcePackBuilder.calculateSHA1(file);
-        source.sendSystemMessage(Component.literal("§eSHA-1 do Arquivo: §a" + sha1));
+        AudioImportManager.AudioEntry entry = AudioImportManager.getImportedSounds().get(soundId);
+        if (entry == null || !entry.file.exists()) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Arquivo físico para '" + soundId + "' não encontrado."));
+            return 1;
+        }
+
+        source.sendSystemMessage(Component.literal("§6=== Informações do Áudio: " + soundId + " ==="));
+        source.sendSystemMessage(Component.literal("§eNome do arquivo: §a" + entry.file.getName()));
+        source.sendSystemMessage(Component.literal("§eCaminho físico: §a" + entry.file.getAbsolutePath()));
+        source.sendSystemMessage(Component.literal("§eTamanho: §a" + entry.sizeBytes + " bytes"));
+        source.sendSystemMessage(Component.literal("§eSHA-256 do Arquivo: §a" + entry.sha256));
         return 1;
     }
 
-    private static int buildPack(CommandSourceStack source) {
-        ResourcePackBuilder.buildPack(source.getServer(), source);
+    private static int syncAudioAll(CommandSourceStack source) {
+        for (ServerPlayer player : source.getServer().getPlayerList().getPlayers()) {
+            AudioImportManager.registerReadyPlayer(player);
+        }
+        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Enviado manifest para sincronização com todos os jogadores online."), false);
         return 1;
     }
 
-    private static int pushPack(CommandSourceStack source) {
-        ResourcePackPusher.pushPack(source.getServer(), source);
+    private static int syncAudioPlayer(CommandSourceStack source, Collection<ServerPlayer> targets) {
+        for (ServerPlayer player : targets) {
+            AudioImportManager.registerReadyPlayer(player);
+        }
+        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Enviado manifest para sincronização com " + targets.size() + " jogador(es)."), false);
         return 1;
     }
 
-    private static int packStatus(CommandSourceStack source) {
-        boolean running = ResourcePackServer.isRunning();
-        int port = Config.SERVER.resourcePackHttpPort.get();
-        String url = Config.SERVER.resourcePackPublicUrl.get().trim();
-        String hash = ResourcePackBuilder.getPackSha1();
+    private static int playSound(CommandSourceStack source, ResourceLocation soundLoc, String categoryName, Collection<ServerPlayer> targets, Vec3 pos, Float volume, Float pitch, Float minVolume) {
+        String soundId = resolveSoundId(soundLoc);
+        if (soundId == null) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Som '" + soundLoc + "' não encontrado na biblioteca."));
+            return 1;
+        }
 
-        if (url.isEmpty()) {
-            try {
-                String ip = InetAddress.getLocalHost().getHostAddress();
-                url = "http://" + ip + ":" + port + "/voicecontrol-pack.zip (Detecção automática)";
-            } catch (Exception e) {
-                url = "Desconhecida (Configuração 'publicUrl' necessária)";
+        SoundSource category = SoundSource.MASTER;
+        try {
+            category = SoundSource.valueOf(categoryName.toUpperCase());
+        } catch (IllegalArgumentException ignored) {}
+
+        boolean positional = (pos != null);
+        double x = positional ? pos.x : 0.0;
+        double y = positional ? pos.y : 0.0;
+        double z = positional ? pos.z : 0.0;
+
+        float vol = volume != null ? volume : 1.0f;
+        float pit = pitch != null ? pitch : 1.0f;
+        float minVol = minVolume != null ? minVolume : 0.0f;
+
+        // Verify client companion status and log warning
+        for (ServerPlayer target : targets) {
+            if (!AudioImportManager.isPlayerReady(target)) {
+                source.sendSystemMessage(Component.literal("§6[VoiceControl] Aviso: O jogador " + target.getGameProfile().getName() + " não possui o client-companion pronto."));
+            } else if (!AudioImportManager.isSoundCachedForPlayer(target, soundId)) {
+                source.sendSystemMessage(Component.literal("§6[VoiceControl] Aviso: O jogador " + target.getGameProfile().getName() + " não tem o som '" + soundId + "' em cache. Enviando solicitação de sincronização..."));
             }
         }
 
-        source.sendSystemMessage(Component.literal("§6=== Status do Resource Pack VoiceControl ==="));
-        source.sendSystemMessage(Component.literal("§eServidor HTTP Interno: " + (running ? "§aExecutando" : "§cParado")));
-        source.sendSystemMessage(Component.literal("§ePorta HTTP: §a" + port));
-        source.sendSystemMessage(Component.literal("§eURL de Download: §a" + url));
-        source.sendSystemMessage(Component.literal("§eSHA-1 do Pack: §a" + (hash.isEmpty() ? "§c(Nenhum pack compilado ainda)" : hash)));
+        DynamicSoundPlayPacket packet = new DynamicSoundPlayPacket(soundId, category.getName(), positional, x, y, z, vol, pit, minVol, 1.0f);
+        for (ServerPlayer target : targets) {
+            VoiceControlNetwork.sendToClient(packet, target);
+        }
+
+        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Comando de reprodução de som '" + soundId + "' enviado para " + targets.size() + " jogador(es)."), false);
+        return 1;
+    }
+
+    private static int playVoiceStatic(CommandSourceStack source, ResourceLocation soundLoc, Collection<ServerPlayer> targets) {
+        String soundId = resolveSoundId(soundLoc);
+        if (soundId == null) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Som '" + soundLoc + "' não encontrado na biblioteca."));
+            return 1;
+        }
+
+        List<ServerPlayer> targetsList = new ArrayList<>(targets);
+        boolean success = VoiceChatPlaybackEngine.playStatic(soundId, targetsList, source);
+        if (success) {
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Iniciada reprodução via Voice Chat (estático) de '" + soundId + "' para " + targetsList.size() + " jogador(es)."), false);
+        }
+        return 1;
+    }
+
+    private static int playVoiceLocational(CommandSourceStack source, ResourceLocation soundLoc, Vec3 pos) {
+        String soundId = resolveSoundId(soundLoc);
+        if (soundId == null) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Som '" + soundLoc + "' não encontrado na biblioteca."));
+            return 1;
+        }
+
+        ServerLevel level = source.getLevel();
+        boolean success = VoiceChatPlaybackEngine.playLocational(soundId, level, pos.x, pos.y, pos.z, source);
+        if (success) {
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Iniciada reprodução via Voice Chat (posicional) de '" + soundId + "' em " + String.format("%.1f, %.1f, %.1f", pos.x, pos.y, pos.z) + "."), false);
+        }
+        return 1;
+    }
+
+    private static int playVoiceEntity(CommandSourceStack source, ResourceLocation soundLoc, Entity entity) {
+        String soundId = resolveSoundId(soundLoc);
+        if (soundId == null) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Som '" + soundLoc + "' não encontrado na biblioteca."));
+            return 1;
+        }
+
+        boolean success = VoiceChatPlaybackEngine.playEntity(soundId, entity, source);
+        if (success) {
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Iniciada reprodução via Voice Chat (entidade) de '" + soundId + "' a partir de " + entity.getDisplayName().getString() + "."), false);
+        }
+        return 1;
+    }
+
+    private static int playVoiceAsPlayer(CommandSourceStack source, ResourceLocation soundLoc, ServerPlayer player, Entity entity) {
+        String soundId = resolveSoundId(soundLoc);
+        if (soundId == null) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Som '" + soundLoc + "' não encontrado na biblioteca."));
+            return 1;
+        }
+
+        boolean success = VoiceChatPlaybackEngine.playAsPlayerFromEntity(soundId, player, entity, source);
+        if (success) {
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Iniciada reprodução via Voice Chat (simulando " + player.getGameProfile().getName() + ") de '" + soundId + "' a partir de " + entity.getDisplayName().getString() + "."), false);
+        }
+        return 1;
+    }
+
+    private static int stopVoicePlay(CommandSourceStack source, ResourceLocation soundLoc) {
+        String soundId = resolveSoundId(soundLoc);
+        if (soundId == null) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Som '" + soundLoc + "' não encontrado na biblioteca."));
+            return 1;
+        }
+
+        VoiceChatPlaybackEngine.stopSound(soundId);
+        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Interrompida reprodução de '" + soundId + "' via Voice Chat."), false);
         return 1;
     }
 }

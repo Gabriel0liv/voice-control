@@ -1,5 +1,6 @@
 package net.voicecontrol.audio;
 
+import net.voicecontrol.Config;
 import net.voicecontrol.logging.AdminLogger;
 
 import java.io.BufferedReader;
@@ -14,8 +15,11 @@ public class OggConverter {
             return ffmpegAvailable;
         }
 
+        String path = Config.SERVER.audioLibraryFfmpegPath.get();
+        String command = (path == null || path.isEmpty()) ? "ffmpeg" : path;
+
         try {
-            Process p = new ProcessBuilder("ffmpeg", "-version").start();
+            Process p = new ProcessBuilder(command, "-version").start();
             p.getInputStream().close();
             p.getOutputStream().close();
             p.getErrorStream().close();
@@ -26,9 +30,9 @@ public class OggConverter {
         }
 
         if (!ffmpegAvailable) {
-            AdminLogger.warn("SYSTEM", "FFmpeg was not found in the system PATH! Custom WAV/MP3 files cannot be automatically converted to OGG. Please install FFmpeg or place pre-converted .ogg files directly.");
+            AdminLogger.warn("SYSTEM", "FFmpeg was not found (path: '" + command + "')! Custom WAV/MP3 files cannot be automatically converted to OGG. Please install FFmpeg or place pre-converted .ogg files directly.");
         } else {
-            AdminLogger.info("SYSTEM", "FFmpeg found and verified successfully.");
+            AdminLogger.info("SYSTEM", "FFmpeg found and verified successfully (" + command + ").");
         }
 
         return ffmpegAvailable;
@@ -40,9 +44,12 @@ public class OggConverter {
             return false;
         }
 
+        String path = Config.SERVER.audioLibraryFfmpegPath.get();
+        String command = (path == null || path.isEmpty()) ? "ffmpeg" : path;
+
         try {
             ProcessBuilder pb = new ProcessBuilder(
-                    "ffmpeg",
+                    command,
                     "-y",
                     "-i",
                     input.getAbsolutePath(),

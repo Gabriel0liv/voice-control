@@ -1,5 +1,6 @@
 package net.voicecontrol;
 
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
@@ -13,7 +14,7 @@ import net.minecraftforge.fml.loading.FMLPaths;
 import net.voicecontrol.audio.AudioImportManager;
 import net.voicecontrol.commands.VoiceControlCommands;
 import net.voicecontrol.logging.AdminLogger;
-import net.voicecontrol.pack.ResourcePackServer;
+import net.voicecontrol.network.VoiceControlNetwork;
 import net.voicecontrol.recording.RecordingManager;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -37,6 +38,9 @@ public class VoiceControlMod {
         // Initialize Admin Logger
         AdminLogger.info("SYSTEM", "Initializing VoiceControl mod.");
 
+        // Initialize Networking Channel and Register Packets
+        VoiceControlNetwork.init();
+
         // Register event handlers
         MinecraftForge.EVENT_BUS.register(this);
     }
@@ -49,9 +53,6 @@ public class VoiceControlMod {
             Files.createDirectories(base.resolve("recordings/players"));
             Files.createDirectories(base.resolve("recordings/monitors"));
             Files.createDirectories(base.resolve("imported-audios"));
-            Files.createDirectories(base.resolve("resourcepack"));
-            Files.createDirectories(base.resolve("resourcepack/build"));
-            Files.createDirectories(base.resolve("resourcepack/cache"));
             Files.createDirectories(base.resolve("logs"));
         } catch (IOException e) {
             LOGGER.error("Failed to create VoiceControl directories", e);
@@ -65,14 +66,9 @@ public class VoiceControlMod {
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         AdminLogger.info("SYSTEM", "Server is starting. Loading VoiceControl services.");
-        
-        // Start resource pack server if enabled
-        if (Config.SERVER.resourcePackEnabled.get() && Config.SERVER.resourcePackInternalHttpServer.get()) {
-            ResourcePackServer.startServer();
-        }
 
         // Initialize sound database and load files
-        if (Config.SERVER.audioImportEnabled.get()) {
+        if (Config.SERVER.audioLibraryEnabled.get()) {
             AudioImportManager.reloadAudios(event.getServer(), null);
         }
     }
@@ -83,9 +79,6 @@ public class VoiceControlMod {
         
         // Stop all recording sessions
         RecordingManager.stopAll(event.getServer().createCommandSourceStack());
-
-        // Stop HTTP server
-        ResourcePackServer.stopServer();
     }
 
     @SubscribeEvent
@@ -98,6 +91,11 @@ public class VoiceControlMod {
     public void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         // If autoStopOnDisconnect is enabled, stop recording sessions for this player
         RecordingManager.handlePlayerLeave(event.getEntity());
+
+        // Remove player from AudioImportManager ready/sync state
+        if (event.getEntity() instanceof ServerPlayer) {
+            AudioImportManager.handlePlayerLeave((ServerPlayer) event.getEntity());
+        }
     }
 
     @SubscribeEvent
