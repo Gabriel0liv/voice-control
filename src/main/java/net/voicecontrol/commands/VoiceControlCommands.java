@@ -172,57 +172,6 @@ public class VoiceControlCommands {
                 )
         );
 
-        // Alias /vcplaysound
-        dispatcher.register(
-            Commands.literal("vcplaysound")
-                .requires(source -> source.hasPermission(Config.SERVER.commandsPermissionLevel.get()))
-                .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
-                    .then(Commands.argument("source", StringArgumentType.word()).suggests(SUGGEST_SOURCES)
-                        .then(Commands.argument("targets", EntityArgument.players())
-                            .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), null, null, null, null))
-                            .then(Commands.argument("pos", Vec3Argument.vec3())
-                                .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), null, null, null))
-                                .then(Commands.argument("volume", FloatArgumentType.floatArg(0.0f))
-                                    .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), null, null))
-                                    .then(Commands.argument("pitch", FloatArgumentType.floatArg(0.5f, 2.0f))
-                                        .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), FloatArgumentType.getFloat(context, "pitch"), null))
-                                        .then(Commands.argument("minVolume", FloatArgumentType.floatArg(0.0f, 1.0f))
-                                            .executes(context -> playSound(context.getSource(), ResourceLocationArgument.getId(context, "sound"), StringArgumentType.getString(context, "source"), EntityArgument.getPlayers(context, "targets"), Vec3Argument.getVec3(context, "pos"), FloatArgumentType.getFloat(context, "volume"), FloatArgumentType.getFloat(context, "pitch"), FloatArgumentType.getFloat(context, "minVolume")))
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-        );
-
-        // Alias /vcstopsound
-        dispatcher.register(
-            Commands.literal("vcstopsound")
-                .requires(source -> source.hasPermission(Config.SERVER.commandsPermissionLevel.get()))
-                .then(Commands.argument("targets", EntityArgument.players())
-                    .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), null, null))
-                    .then(Commands.argument("source", StringArgumentType.word()).suggests(SUGGEST_SOURCES)
-                        .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), StringArgumentType.getString(context, "source"), null))
-                        .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
-                            .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), StringArgumentType.getString(context, "source"), ResourceLocationArgument.getId(context, "sound")))
-                        )
-                    )
-                )
-        );
-
-        // Alias /vcvoicestop
-        dispatcher.register(
-            Commands.literal("vcvoicestop")
-                .requires(source -> source.hasPermission(Config.SERVER.commandsPermissionLevel.get()))
-                .then(Commands.literal("all")
-                    .executes(context -> voiceStopAll(context.getSource()))
-                )
-                .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
-                    .executes(context -> voiceStopSound(context.getSource(), ResourceLocationArgument.getId(context, "sound")))
-                )
-        );
     }
 
     private static String resolveSoundId(ResourceLocation location) {

@@ -61,6 +61,9 @@ A pasta `voice-control/` é criada automaticamente na raiz do servidor e do clie
 
 Todos os comandos exigem nível de permissão de operador de nível configurável (padrão: 3).
 
+> [!NOTE]
+> Aliases curtos foram removidos temporariamente por estabilidade. Use sempre os comandos completos com `/voicectl`.
+
 ### 1. Sistema de Gravação (`/voicectl rec`)
 * `/voicectl rec mic start <player>` - Inicia a gravação direta do microfone do jogador.
 * `/voicectl rec mic start all` - Inicia a gravação de todos os jogadores online.
@@ -82,10 +85,8 @@ Estes comandos tocam e param áudios diretamente no hardware de som do cliente a
 
 * `/voicectl playsound <sound> <source> <targets> [pos] [volume] [pitch] [minVolume]`
   * Toca um som dinâmico personalizado. Se posicional, acompanha as coordenadas informadas 3D espacialmente.
-  * *Alias:* `/vcplaysound ...`
 * `/voicectl stopsound <targets> [source] [sound]`
   * Interrompe a execução dos sons dinâmicos nos alvos informados. Se `source` (categoria) ou `sound` (ID) forem informados, filtra para parar apenas os correspondentes.
-  * *Alias:* `/vcstopsound ...`
 
 ### 4. Motor de Reprodução Simple Voice Chat (`/voicectl voiceplay` & `/voicectl voicestop`)
 Estes comandos transmitem os áudios importados decodificados em PCM como transmissões de microfone dentro do voice chat posicional ou estático.
@@ -96,7 +97,6 @@ Estes comandos transmitem os áudios importados decodificados em PCM como transm
 * `/voicectl voiceplay stop <sound>` - Para a transmissão de voz de um som específico.
 * `/voicectl voicestop <sound>` - Para a transmissão de voz de um som específico (principal).
 * `/voicectl voicestop all` - Interrompe imediatamente todas as transmissões ativas via Voice Chat.
-* *Alias:* `/vcvoicestop <sound|all>` - Alias para interromper transmissões via Voice Chat.
 
 ---
 
