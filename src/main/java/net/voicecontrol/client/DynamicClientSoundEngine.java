@@ -106,7 +106,9 @@ public class DynamicClientSoundEngine {
         final double x, y, z;
         final float baseVolume;
         final float minVolume;
-        int stoppedTicks = 0;
+        boolean stopRequested = false;
+        boolean pendingCleanup = false;
+        int cleanupTicks = 0;
 
         PlayingSound(String soundId, String sourceCategory, int alSourceId, int alBufferId, boolean positional, double x, double y, double z, float baseVolume, float minVolume) {
             this.soundId = soundId;
@@ -126,10 +128,10 @@ public class DynamicClientSoundEngine {
         try {
             int error;
             while ((error = AL10.alGetError()) != AL10.AL_NO_ERROR) {
-                AdminLogger.warn("CLIENT", "Cleared OpenAL error before " + context + ": 0x" + Integer.toHexString(error));
+                ClientAudioDebugLogger.warn("Cleared OpenAL error before " + context + ": 0x" + Integer.toHexString(error));
             }
         } catch (Throwable t) {
-            AdminLogger.error("CLIENT", "Failed to clear OpenAL errors for " + context + ": " + t.getMessage());
+            ClientAudioDebugLogger.error("Failed to clear OpenAL errors for " + context + ": " + t.getMessage());
         }
     }
 
@@ -137,41 +139,124 @@ public class DynamicClientSoundEngine {
         try {
             int error = AL10.alGetError();
             if (error != AL10.AL_NO_ERROR) {
-                AdminLogger.error("CLIENT", "OpenAL error detected in " + context + ": 0x" + Integer.toHexString(error));
+                ClientAudioDebugLogger.error("OpenAL error detected in " + context + ": 0x" + Integer.toHexString(error));
                 return true;
             }
         } catch (Throwable t) {
-            AdminLogger.error("CLIENT", "Failed to check OpenAL error for " + context + ": " + t.getMessage());
+            ClientAudioDebugLogger.error("Failed to check OpenAL error for " + context + ": " + t.getMessage());
         }
         return false;
     }
 
-    private static void safeStopAndDelete(PlayingSound sound) {
+    private static boolean safeIsSource(int source, String context) {
         try {
-            clearOpenALErrors("cleanup " + sound.soundId);
-
-            if (AL10.alIsSource(sound.alSourceId)) {
-                try {
-                    AL10.alSourceStop(sound.alSourceId);
-                    AL10.alSourcei(sound.alSourceId, AL10.AL_BUFFER, 0);
-                    AL10.alDeleteSources(sound.alSourceId);
-                } catch (Throwable t) {
-                    AdminLogger.error("CLIENT", "Failed deleting OpenAL source for " + sound.soundId + ": " + t.getMessage());
-                }
-            }
-
-            if (AL10.alIsBuffer(sound.alBufferId)) {
-                try {
-                    AL10.alDeleteBuffers(sound.alBufferId);
-                } catch (Throwable t) {
-                    AdminLogger.error("CLIENT", "Failed deleting OpenAL buffer for " + sound.soundId + ": " + t.getMessage());
-                }
-            }
-
-            checkOpenALError("cleanup " + sound.soundId);
-            AdminLogger.info("CLIENT", "[VoiceControl] OpenAL cleanup completed: sound=" + sound.soundId);
+            boolean result = AL10.alIsSource(source);
+            checkOpenALError("alIsSource " + context);
+            return result;
         } catch (Throwable t) {
-            AdminLogger.error("CLIENT", "OpenAL cleanup crashed safely for " + sound.soundId + ": " + t.getMessage());
+            ClientAudioDebugLogger.error("Failed to check if source: " + source + " (" + context + "): " + t.getMessage());
+            return false;
+        }
+    }
+
+    private static boolean safeIsBuffer(int buffer, String context) {
+        try {
+            boolean result = AL10.alIsBuffer(buffer);
+            checkOpenALError("alIsBuffer " + context);
+            return result;
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed to check if buffer: " + buffer + " (" + context + "): " + t.getMessage());
+            return false;
+        }
+    }
+
+    private static void safeSourceStop(int source, String context) {
+        try {
+            if (safeIsSource(source, "safeSourceStop check")) {
+                AL10.alSourceStop(source);
+                checkOpenALError("alSourceStop " + context);
+            }
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed to stop source: " + source + " (" + context + "): " + t.getMessage());
+        }
+    }
+
+    private static void safeSourcei(int source, int param, int value, String context) {
+        try {
+            if (safeIsSource(source, "safeSourcei check")) {
+                AL10.alSourcei(source, param, value);
+                checkOpenALError("alSourcei " + context);
+            }
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed sourcei on source: " + source + ", param: " + param + ", value: " + value + " (" + context + "): " + t.getMessage());
+        }
+    }
+
+    private static void safeSourcef(int source, int param, float value, String context) {
+        try {
+            if (safeIsSource(source, "safeSourcef check")) {
+                AL10.alSourcef(source, param, value);
+                checkOpenALError("alSourcef " + context);
+            }
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed sourcef on source: " + source + ", param: " + param + ", value: " + value + " (" + context + "): " + t.getMessage());
+        }
+    }
+
+    private static int safeGetSourceState(int source, String context) {
+        try {
+            if (safeIsSource(source, "safeGetSourceState check")) {
+                int state = AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE);
+                checkOpenALError("alGetSourcei " + context);
+                return state;
+            }
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed to get source state for: " + source + " (" + context + "): " + t.getMessage());
+        }
+        return AL10.AL_STOPPED;
+    }
+
+    private static void safeDeleteSource(int source, String context) {
+        try {
+            if (safeIsSource(source, "safeDeleteSource check")) {
+                AL10.alDeleteSources(source);
+                checkOpenALError("alDeleteSources " + context);
+            }
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed to delete source: " + source + " (" + context + "): " + t.getMessage());
+        }
+    }
+
+    private static void safeDeleteBuffer(int buffer, String context) {
+        try {
+            if (safeIsBuffer(buffer, "safeDeleteBuffer check")) {
+                AL10.alDeleteBuffers(buffer);
+                checkOpenALError("alDeleteBuffers " + context);
+            }
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed to delete buffer: " + buffer + " (" + context + "): " + t.getMessage());
+        }
+    }
+
+    private static int safeGenSource(String context) {
+        try {
+            int source = AL10.alGenSources();
+            checkOpenALError("alGenSources " + context);
+            return source;
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed to generate source (" + context + "): " + t.getMessage());
+            return 0;
+        }
+    }
+
+    private static int safeGenBuffer(String context) {
+        try {
+            int buffer = AL10.alGenBuffers();
+            checkOpenALError("alGenBuffers " + context);
+            return buffer;
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed to generate buffer (" + context + "): " + t.getMessage());
+            return 0;
         }
     }
 
@@ -192,7 +277,59 @@ public class DynamicClientSoundEngine {
         return finalVolume;
     }
 
+    private static void executeDelayedCleanup(PlayingSound sound) {
+        try {
+            ClientAudioDebugLogger.info("Executing delayed OpenAL cleanup for " + sound.soundId + " (source: " + sound.alSourceId + ", buffer: " + sound.alBufferId + ")");
+
+            if (Config.SERVER.dynamicSoundDebugDisableOpenALCleanup.get()) {
+                ClientAudioDebugLogger.warnOnceEvery(
+                    "skip-cleanup-" + sound.soundId,
+                    "OpenAL cleanup skipped by debug config: sound=" + sound.soundId,
+                    5000
+                );
+                return;
+            }
+
+            clearOpenALErrors("cleanup " + sound.soundId);
+
+            if (safeIsSource(sound.alSourceId, "delayedCleanup source")) {
+                safeSourceStop(sound.alSourceId, "delayedCleanup stop");
+                safeSourcei(sound.alSourceId, AL10.AL_BUFFER, 0, "delayedCleanup detach");
+                safeDeleteSource(sound.alSourceId, "delayedCleanup delete");
+            }
+
+            if (safeIsBuffer(sound.alBufferId, "delayedCleanup buffer")) {
+                safeDeleteBuffer(sound.alBufferId, "delayedCleanup delete");
+            }
+
+            checkOpenALError("cleanup " + sound.soundId);
+            ClientAudioDebugLogger.info("[VoiceControl] OpenAL cleanup completed: sound=" + sound.soundId);
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("OpenAL cleanup crashed safely for " + sound.soundId + ": " + t.getMessage());
+        }
+    }
+
+    private static void requestStopAndDelayedCleanup(PlayingSound sound) {
+        try {
+            ClientAudioDebugLogger.info("Stop requested: sound=" + sound.soundId + ", source=" + sound.alSourceId + ", buffer=" + sound.alBufferId);
+            // Apply gain 0
+            safeSourcef(sound.alSourceId, AL10.AL_GAIN, 0.0f, "requestStopAndDelayedCleanup gain 0");
+            // Call stop with safe wrapper
+            safeSourceStop(sound.alSourceId, "requestStopAndDelayedCleanup stop");
+            
+            sound.stopRequested = true;
+            sound.pendingCleanup = true;
+            sound.cleanupTicks = 0;
+            int ticks = Config.SERVER.dynamicSoundCleanupDelayTicks.get();
+            ClientAudioDebugLogger.info("Delayed cleanup scheduled: sound=" + sound.soundId + ", delay=" + ticks);
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed to request stop for " + sound.soundId + ": " + t.getMessage());
+        }
+    }
+
     public static void init(File gameDir) {
+        ClientAudioDebugLogger.init(gameDir);
+        ClientAudioDebugLogger.info("Initializing client sound engine cache directory...");
         cacheDir = new File(gameDir, "voice-control/cache");
         if (!cacheDir.exists()) {
             cacheDir.mkdirs();
@@ -379,6 +516,15 @@ public class DynamicClientSoundEngine {
     public static void playSound(String soundId, String sourceCategory, boolean positional, double x, double y, double z, float volume, float pitch, float minVolume, float attenuation) {
         if (!Config.SERVER.dynamicSoundEnabled.get()) return;
 
+        if (!Config.SERVER.dynamicSoundUseOpenALPlayback.get()) {
+            ClientAudioDebugLogger.warnOnceEvery("playback-disabled", "Dynamic OpenAL playback is disabled by config.", 10000);
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player != null) {
+                mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal("§c[VoiceControl] Dynamic OpenAL playback is disabled by config."), true);
+            }
+            return;
+        }
+
         // Client-side deduplication check
         int dedupeWindow = Config.SERVER.dynamicSoundDedupeWindowTicks.get();
         if (dedupeWindow > 0) {
@@ -386,7 +532,7 @@ public class DynamicClientSoundEngine {
             String key = soundId + "_" + sourceCategory + "_" + positional + "_" + x + "_" + y + "_" + z;
             Long lastPlay = RECENT_CLIENT_PLAYS.get(key);
             if (lastPlay != null && (now - lastPlay) < dedupeWindow) {
-                AdminLogger.warn("CLIENT", "[VoiceControl] Duplicate playsound ignored client-side: sound=" + soundId + ", category=" + sourceCategory);
+                ClientAudioDebugLogger.warnOnceEvery("dup-client-" + key, "[VoiceControl] Duplicate playsound ignored client-side: sound=" + soundId + ", category=" + sourceCategory, 5000);
                 return;
             }
             RECENT_CLIENT_PLAYS.put(key, now);
@@ -465,8 +611,8 @@ public class DynamicClientSoundEngine {
                         matches = (existing.x == x && existing.y == y && existing.z == z);
                     }
                     if (matches) {
-                        AdminLogger.info("CLIENT", "[VoiceControl] Stopped existing identical sound before replay: sound=" + soundId);
-                        safeStopAndDelete(existing);
+                        ClientAudioDebugLogger.info("[VoiceControl] Stopped existing identical sound before replay: sound=" + soundId);
+                        executeDelayedCleanup(existing);
                         it.remove();
                     }
                 }
@@ -478,30 +624,45 @@ public class DynamicClientSoundEngine {
         synchronized (playingSounds) {
             while (playingSounds.size() >= maxConcurrent && !playingSounds.isEmpty()) {
                 PlayingSound oldest = playingSounds.remove(0);
-                safeStopAndDelete(oldest);
+                executeDelayedCleanup(oldest);
             }
         }
 
-        int bufferId = AL10.alGenBuffers();
+        int bufferId = safeGenBuffer("triggerOpenALPlay");
         int format = (pcm.channels == 1) ? AL10.AL_FORMAT_MONO16 : AL10.AL_FORMAT_STEREO16;
         
-        AL10.alBufferData(bufferId, format, pcm.data, pcm.sampleRate);
+        try {
+            AL10.alBufferData(bufferId, format, pcm.data, pcm.sampleRate);
+            checkOpenALError("alBufferData");
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed alBufferData: " + t.getMessage());
+        }
         MemoryUtil.memFree(pcm.data); // Free the STB allocated memory immediately
 
-        int sourceId = AL10.alGenSources();
-        AL10.alSourcei(sourceId, AL10.AL_BUFFER, bufferId);
-        AL10.alSourcef(sourceId, AL10.AL_PITCH, pitch);
+        int sourceId = safeGenSource("triggerOpenALPlay");
+        safeSourcei(sourceId, AL10.AL_BUFFER, bufferId, "triggerOpenALPlay bind");
+        safeSourcef(sourceId, AL10.AL_PITCH, pitch, "triggerOpenALPlay pitch");
 
         // Apply spatial properties
         if (positional) {
-            AL10.alSourcei(sourceId, AL10.AL_SOURCE_RELATIVE, AL10.AL_FALSE);
-            AL10.alSource3f(sourceId, AL10.AL_POSITION, (float) x, (float) y, (float) z);
-            AL10.alSourcef(sourceId, AL10.AL_ROLLOFF_FACTOR, attenuation);
-            AL10.alSourcef(sourceId, AL10.AL_REFERENCE_DISTANCE, 8.0f); // Standard Reference Distance
-            AL10.alSourcef(sourceId, AL10.AL_MAX_DISTANCE, 128.0f);
+            safeSourcei(sourceId, AL10.AL_SOURCE_RELATIVE, AL10.AL_FALSE, "spatial relative");
+            try {
+                AL10.alSource3f(sourceId, AL10.AL_POSITION, (float) x, (float) y, (float) z);
+                checkOpenALError("alSource3f AL_POSITION");
+            } catch (Throwable t) {
+                ClientAudioDebugLogger.error("Failed alSource3f AL_POSITION: " + t.getMessage());
+            }
+            safeSourcef(sourceId, AL10.AL_ROLLOFF_FACTOR, attenuation, "spatial rolloff");
+            safeSourcef(sourceId, AL10.AL_REFERENCE_DISTANCE, 8.0f, "spatial refdist"); // Standard Reference Distance
+            safeSourcef(sourceId, AL10.AL_MAX_DISTANCE, 128.0f, "spatial maxdist");
         } else {
-            AL10.alSourcei(sourceId, AL10.AL_SOURCE_RELATIVE, AL10.AL_TRUE);
-            AL10.alSource3f(sourceId, AL10.AL_POSITION, 0.0f, 0.0f, 0.0f);
+            safeSourcei(sourceId, AL10.AL_SOURCE_RELATIVE, AL10.AL_TRUE, "spatial relative");
+            try {
+                AL10.alSource3f(sourceId, AL10.AL_POSITION, 0.0f, 0.0f, 0.0f);
+                checkOpenALError("alSource3f AL_POSITION");
+            } catch (Throwable t) {
+                ClientAudioDebugLogger.error("Failed alSource3f AL_POSITION: " + t.getMessage());
+            }
         }
 
         // Apply combined volumes
@@ -509,26 +670,28 @@ public class DynamicClientSoundEngine {
         float masterVol = getCategoryVolume("master");
         float categoryVol = getCategoryVolume(sourceCategory);
         float effectiveVolume = calculateEffectiveVolume(sound);
-        AL10.alSourcef(sourceId, AL10.AL_GAIN, effectiveVolume);
+        safeSourcef(sourceId, AL10.AL_GAIN, effectiveVolume, "gain");
 
-        AL10.alSourcePlay(sourceId);
-        AdminLogger.info("CLIENT", "[VoiceControl] OpenAL play started: sound=" + soundId + ", source=" + sourceId + ", buffer=" + bufferId);
-        AdminLogger.info("CLIENT", "[VoiceControl] Volume resolved: sound=" + soundId + ", category=" + sourceCategory + ", base=" + volume + ", master=" + masterVol + ", categoryVolume=" + categoryVol + ", min=" + minVolume + ", final=" + effectiveVolume);
+        try {
+            AL10.alSourcePlay(sourceId);
+            checkOpenALError("alSourcePlay");
+        } catch (Throwable t) {
+            ClientAudioDebugLogger.error("Failed alSourcePlay: " + t.getMessage());
+        }
+        ClientAudioDebugLogger.info("[VoiceControl] OpenAL play started: sound=" + soundId + ", source=" + sourceId + ", buffer=" + bufferId);
+        ClientAudioDebugLogger.info("[VoiceControl] Volume resolved: sound=" + soundId + ", category=" + sourceCategory + ", base=" + volume + ", master=" + masterVol + ", categoryVolume=" + categoryVol + ", min=" + minVolume + ", final=" + effectiveVolume);
 
         playingSounds.add(sound);
     }
 
     public static void stopSounds(String soundId, String category) {
         synchronized (playingSounds) {
-            Iterator<PlayingSound> it = playingSounds.iterator();
-            while (it.hasNext()) {
-                PlayingSound sound = it.next();
+            for (PlayingSound sound : playingSounds) {
                 boolean matchSound = (soundId == null || sound.soundId.equalsIgnoreCase(soundId));
                 boolean matchCategory = (category == null || sound.sourceCategory.equalsIgnoreCase(category));
                 
                 if (matchSound && matchCategory) {
-                    safeStopAndDelete(sound);
-                    it.remove();
+                    requestStopAndDelayedCleanup(sound);
                 }
             }
         }
@@ -538,12 +701,12 @@ public class DynamicClientSoundEngine {
         synchronized (playingSounds) {
             for (PlayingSound sound : playingSounds) {
                 try {
-                    if (AL10.alIsSource(sound.alSourceId)) {
+                    if (safeIsSource(sound.alSourceId, "updateVolumeSettings")) {
                         float effectiveVolume = calculateEffectiveVolume(sound);
-                        AL10.alSourcef(sound.alSourceId, AL10.AL_GAIN, effectiveVolume);
+                        safeSourcef(sound.alSourceId, AL10.AL_GAIN, effectiveVolume, "updateVolumeSettings gain");
                     }
                 } catch (Throwable t) {
-                    AdminLogger.error("CLIENT", "Failed to update OpenAL volume in updateVolumeSettings for " + sound.soundId + ": " + t.getMessage());
+                    ClientAudioDebugLogger.error("Failed to update OpenAL volume in updateVolumeSettings for " + sound.soundId + ": " + t.getMessage());
                 }
             }
         }
@@ -569,7 +732,7 @@ public class DynamicClientSoundEngine {
                     float[] orientation = new float[]{look.x, look.y, look.z, up.x, up.y, up.z};
                     AL10.alListenerfv(AL10.AL_ORIENTATION, orientation);
                 } catch (Throwable t) {
-                    AdminLogger.error("CLIENT", "Failed to update OpenAL listener position/orientation: " + t.getMessage());
+                    ClientAudioDebugLogger.errorOnceEvery("listener-update-err", "Failed to update OpenAL listener position/orientation: " + t.getMessage(), 10000);
                 }
             }
         }
@@ -579,37 +742,26 @@ public class DynamicClientSoundEngine {
             Iterator<PlayingSound> it = playingSounds.iterator();
             while (it.hasNext()) {
                 PlayingSound sound = it.next();
-                if (!AL10.alIsSource(sound.alSourceId)) {
+                if (!safeIsSource(sound.alSourceId, "clientTick validity check")) {
                     it.remove();
                     continue;
                 }
 
-                int state;
-                try {
-                    state = AL10.alGetSourcei(sound.alSourceId, AL10.AL_SOURCE_STATE);
-                } catch (Throwable t) {
-                    AdminLogger.error("CLIENT", "Failed reading OpenAL source state for " + sound.soundId + ": " + t.getMessage());
-                    safeStopAndDelete(sound);
-                    it.remove();
-                    continue;
+                int state = safeGetSourceState(sound.alSourceId, "clientTick state check");
+
+                if (state == AL10.AL_STOPPED && !sound.pendingCleanup) {
+                    ClientAudioDebugLogger.info("[VoiceControl] OpenAL sound stopped naturally: sound=" + sound.soundId + ", source=" + sound.alSourceId + ", buffer=" + sound.alBufferId);
+                    sound.pendingCleanup = true;
+                    sound.cleanupTicks = 0;
                 }
 
-                if (state == AL10.AL_STOPPED) {
-                    if (sound.stoppedTicks == 0) {
-                        AdminLogger.info("CLIENT", "[VoiceControl] OpenAL sound stopped naturally: sound=" + sound.soundId + ", source=" + sound.alSourceId + ", buffer=" + sound.alBufferId);
-                    }
-                    if (Config.SERVER.dynamicSoundDebugDisableOpenALCleanup.get()) {
-                        AdminLogger.warn("CLIENT", "[VoiceControl] OpenAL cleanup skipped by debug config: sound=" + sound.soundId);
-                        it.remove();
-                        continue;
-                    }
-                    sound.stoppedTicks++;
-                    if (sound.stoppedTicks >= 20) {
-                        safeStopAndDelete(sound);
+                if (sound.pendingCleanup) {
+                    sound.cleanupTicks++;
+                    int delay = Config.SERVER.dynamicSoundCleanupDelayTicks.get();
+                    if (sound.cleanupTicks >= delay) {
+                        executeDelayedCleanup(sound);
                         it.remove();
                     }
-                } else {
-                    sound.stoppedTicks = 0;
                 }
             }
         }
@@ -618,12 +770,12 @@ public class DynamicClientSoundEngine {
         synchronized (playingSounds) {
             for (PlayingSound sound : playingSounds) {
                 try {
-                    if (AL10.alIsSource(sound.alSourceId)) {
+                    if (safeIsSource(sound.alSourceId, "clientTick volume update")) {
                         float effectiveVolume = calculateEffectiveVolume(sound);
-                        AL10.alSourcef(sound.alSourceId, AL10.AL_GAIN, effectiveVolume);
+                        safeSourcef(sound.alSourceId, AL10.AL_GAIN, effectiveVolume, "clientTick volume update gain");
                     }
                 } catch (Throwable t) {
-                    AdminLogger.error("CLIENT", "Failed to update OpenAL volume for " + sound.soundId + ": " + t.getMessage());
+                    ClientAudioDebugLogger.errorOnceEvery("vol-update-err-" + sound.soundId, "Failed to update OpenAL volume for " + sound.soundId + ": " + t.getMessage(), 10000);
                 }
             }
         }
@@ -633,7 +785,7 @@ public class DynamicClientSoundEngine {
         mainThreadQueue.clear();
         synchronized (playingSounds) {
             for (PlayingSound sound : playingSounds) {
-                safeStopAndDelete(sound);
+                executeDelayedCleanup(sound);
             }
             playingSounds.clear();
         }
@@ -644,7 +796,7 @@ public class DynamicClientSoundEngine {
             SoundSource source = SoundSource.valueOf(categoryName.toUpperCase(Locale.ROOT));
             return Minecraft.getInstance().options.getSoundSourceVolume(source);
         } catch (IllegalArgumentException e) {
-            AdminLogger.warn("CLIENT", "Unknown sound category '" + categoryName + "', falling back to master volume.");
+            ClientAudioDebugLogger.warnOnceEvery("unknown-category-" + categoryName, "Unknown sound category '" + categoryName + "', falling back to master volume.", 10000);
             try {
                 return Minecraft.getInstance().options.getSoundSourceVolume(SoundSource.MASTER);
             } catch (Exception ex) {

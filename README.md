@@ -172,6 +172,13 @@ O arquivo de configuração é gerado na primeira execução do servidor:
     dedupeWindowTicks = 10
     # Parar instâncias idênticas em execução antes de reiniciar o áudio no cliente
     stopExistingIdenticalBeforePlay = true
+    # Atraso na limpeza do OpenAL (em ticks) antes de deletar sources/buffers (evita crashes)
+    cleanupDelayTicks = 40
+    # Modo de depuração: desativa a remoção física de resources do OpenAL ao parar/concluir
+    debugDisableOpenALCleanup = false
+    # Utilizar reprodução customizada OpenAL no client (se false, atua como um kill-switch)
+    useOpenALPlayback = true
+
 
 [voicePlayback]
     # Ativar motor de transmissão no Simple Voice Chat

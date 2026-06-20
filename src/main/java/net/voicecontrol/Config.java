@@ -54,6 +54,8 @@ public class Config {
         public final ForgeConfigSpec.BooleanValue dynamicSoundDebugDisableOpenALCleanup;
         public final ForgeConfigSpec.IntValue dynamicSoundDedupeWindowTicks;
         public final ForgeConfigSpec.BooleanValue dynamicSoundStopExistingIdenticalBeforePlay;
+        public final ForgeConfigSpec.IntValue dynamicSoundCleanupDelayTicks;
+        public final ForgeConfigSpec.BooleanValue dynamicSoundUseOpenALPlayback;
 
         // Voice Playback configurations
         public final ForgeConfigSpec.BooleanValue voicePlaybackEnabled;
@@ -166,6 +168,12 @@ public class Config {
             dynamicSoundStopExistingIdenticalBeforePlay = builder
                     .comment("If true, stop any existing identical sound before starting a new one to avoid overlay.")
                     .define("stopExistingIdenticalBeforePlay", true);
+            dynamicSoundCleanupDelayTicks = builder
+                    .comment("Delayed cleanup ticks before OpenAL sources/buffers are deleted.")
+                    .defineInRange("cleanupDelayTicks", 40, 1, 1200);
+            dynamicSoundUseOpenALPlayback = builder
+                    .comment("Use custom OpenAL playback engine for playsound commands. If false, disables client audio playback.")
+                    .define("useOpenALPlayback", true);
             builder.pop();
 
             builder.push("voicePlayback");
