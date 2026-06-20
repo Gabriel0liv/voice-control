@@ -309,13 +309,13 @@ public class DynamicClientSoundEngine {
         }
     }
 
-    private static void requestStopAndDelayedCleanup(PlayingSound sound) {
+    private static void markForDelayedCleanup(PlayingSound sound, String reason) {
         try {
-            ClientAudioDebugLogger.info("Stop requested: sound=" + sound.soundId + ", source=" + sound.alSourceId + ", buffer=" + sound.alBufferId);
+            ClientAudioDebugLogger.info("Delayed cleanup marked (Reason: " + reason + "): sound=" + sound.soundId + ", source=" + sound.alSourceId + ", buffer=" + sound.alBufferId);
             // Apply gain 0
-            safeSourcef(sound.alSourceId, AL10.AL_GAIN, 0.0f, "requestStopAndDelayedCleanup gain 0");
+            safeSourcef(sound.alSourceId, AL10.AL_GAIN, 0.0f, "markForDelayedCleanup gain 0");
             // Call stop with safe wrapper
-            safeSourceStop(sound.alSourceId, "requestStopAndDelayedCleanup stop");
+            safeSourceStop(sound.alSourceId, "markForDelayedCleanup stop");
             
             sound.stopRequested = true;
             sound.pendingCleanup = true;
@@ -323,8 +323,12 @@ public class DynamicClientSoundEngine {
             int ticks = Config.SERVER.dynamicSoundCleanupDelayTicks.get();
             ClientAudioDebugLogger.info("Delayed cleanup scheduled: sound=" + sound.soundId + ", delay=" + ticks);
         } catch (Throwable t) {
-            ClientAudioDebugLogger.error("Failed to request stop for " + sound.soundId + ": " + t.getMessage());
+            ClientAudioDebugLogger.error("Failed to mark for delayed cleanup for " + sound.soundId + " (Reason: " + reason + "): " + t.getMessage());
         }
+    }
+
+    private static void requestStopAndDelayedCleanup(PlayingSound sound) {
+        markForDelayedCleanup(sound, "Stop requested");
     }
 
     public static void init(File gameDir) {
@@ -601,19 +605,18 @@ public class DynamicClientSoundEngine {
         // Stop existing identical sound if configured
         if (Config.SERVER.dynamicSoundStopExistingIdenticalBeforePlay.get()) {
             synchronized (playingSounds) {
-                Iterator<PlayingSound> it = playingSounds.iterator();
-                while (it.hasNext()) {
-                    PlayingSound existing = it.next();
-                    boolean matches = existing.soundId.equalsIgnoreCase(soundId)
-                            && existing.sourceCategory.equalsIgnoreCase(sourceCategory)
-                            && existing.positional == positional;
-                    if (matches && positional) {
-                        matches = (existing.x == x && existing.y == y && existing.z == z);
-                    }
-                    if (matches) {
-                        ClientAudioDebugLogger.info("[VoiceControl] Stopped existing identical sound before replay: sound=" + soundId);
-                        executeDelayedCleanup(existing);
-                        it.remove();
+                for (PlayingSound existing : playingSounds) {
+                    if (!existing.pendingCleanup) {
+                        boolean matches = existing.soundId.equalsIgnoreCase(soundId)
+                                && existing.sourceCategory.equalsIgnoreCase(sourceCategory)
+                                && existing.positional == positional;
+                        if (matches && positional) {
+                            matches = (existing.x == x && existing.y == y && existing.z == z);
+                        }
+                        if (matches) {
+                            ClientAudioDebugLogger.info("[VoiceControl] Stopped existing identical sound before replay: sound=" + soundId);
+                            markForDelayedCleanup(existing, "Stop identical before play");
+                        }
                     }
                 }
             }
@@ -622,9 +625,24 @@ public class DynamicClientSoundEngine {
         // Ensure concurrent sound limit is respected
         int maxConcurrent = Config.SERVER.dynamicSoundMaxConcurrentSounds.get();
         synchronized (playingSounds) {
-            while (playingSounds.size() >= maxConcurrent && !playingSounds.isEmpty()) {
-                PlayingSound oldest = playingSounds.remove(0);
-                executeDelayedCleanup(oldest);
+            while (true) {
+                int activeCount = 0;
+                PlayingSound oldestActive = null;
+                for (PlayingSound ps : playingSounds) {
+                    if (!ps.pendingCleanup) {
+                        activeCount++;
+                        if (oldestActive == null) {
+                            oldestActive = ps;
+                        }
+                    }
+                }
+
+                if (activeCount < maxConcurrent || oldestActive == null) {
+                    break;
+                }
+
+                ClientAudioDebugLogger.info("[VoiceControl] Concurrent sound limit reached (" + activeCount + " >= " + maxConcurrent + "). Stopping oldest active sound: sound=" + oldestActive.soundId);
+                markForDelayedCleanup(oldestActive, "Max concurrency limit reached");
             }
         }
 
