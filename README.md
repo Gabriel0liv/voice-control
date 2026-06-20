@@ -1,6 +1,11 @@
 # VoiceControl Mod (Forge 1.20.1)
 
-A server-side only Minecraft Forge mod that integrates with **Simple Voice Chat** to record player voice chat and package imported audios into a resource pack dynamically to be played using the vanilla `/playsound` command.
+Um mod client-server para Minecraft Forge 1.20.1 integrado com **Simple Voice Chat** que permite:
+1. Gravar áudio de microfone de jogadores e monitorar sessões de áudio.
+2. Importar e reproduzir sons dinâmicos client-side (sem resource pack) via comandos `/playsound` customizados.
+3. Transmitir áudios importados diretamente como streams de voz no voice chat da vizinhança.
+
+O mod passou de uma arquitetura baseada em Resource Packs para uma arquitetura de **Client-Server companion**. O mod deve estar instalado tanto no servidor quanto no cliente para que as funcionalidades de áudio dinâmico funcionem corretamente.
 
 ---
 
@@ -20,95 +25,84 @@ No Windows:
 ```
 O arquivo `.jar` compilado será gerado em `build/libs/`.
 
-### Instalação no Servidor
-1. Cole o arquivo `.jar` gerado na pasta `mods/` do seu servidor Forge 1.20.1.
-2. Certifique-se de que o mod **Simple Voice Chat** esteja instalado tanto no servidor quanto nos clientes que desejam falar e ouvir.
-3. Inicie o servidor para gerar as pastas de trabalho e o arquivo de configuração.
+### Instalação no Servidor e Cliente
+1. Cole o arquivo `.jar` gerado na pasta `mods/` do seu servidor Forge 1.20.1 e do seu cliente Minecraft.
+2. Certifique-se de que o mod **Simple Voice Chat** esteja instalado tanto no servidor quanto no cliente.
+3. Inicie o jogo/servidor.
 
 ---
 
 ## 📦 Dependências
 
-* **Forge Loader**: Compatível com Minecraft 1.20.1.
-* **Simple Voice Chat (Mod & API)**: Requer versão **2.6.x** instalada no servidor.
-* **FFmpeg (Opcional, Altamente Recomendado)**: Necessário para a conversão automática de arquivos `.mp3` e `.wav` importados para `.ogg`. Caso não esteja disponível no PATH do sistema, o mod aceitará apenas arquivos `.ogg` já convertidos colocados diretamente na pasta.
+* **Forge Loader**: Compatível com Minecraft 1.20.1 (Forge 47.4.10).
+* **Simple Voice Chat (Mod & API)**: Requer versão **2.6.x** instalada.
+* **FFmpeg (Opcional, Altamente Recomendado no Servidor)**: Necessário para decodificar arquivos `.ogg` para PCM 48kHz mono no servidor para reprodução via Voice Chat, bem como para conversão automática de `.mp3` e `.wav` importados para `.ogg`.
 
 ---
 
-## 📂 Estrutura de Pastas do Servidor
+## 📂 Estrutura de Pastas de Trabalho
 
-A pasta `voice-control/` é criada automaticamente na raiz do servidor:
+A pasta `voice-control/` é criada automaticamente na raiz do servidor e do cliente (`.minecraft/voice-control/`):
 
+### Servidor:
 * `voice-control/recordings/` - Pasta contendo todas as gravações ativas e concluídas.
-  * `players/<nick>/` - Gravações de microfone individuais de players (Opus decodificado para MP3 ou WAV).
-  * `monitors/<nick>/` - Gravações de áudio mixadas do que um player monitorado ouviu. Também contém a subpasta `speakers/<speakerNick>/` com a faixa separada de cada falante.
-* `voice-control/imported-audios/` - Pasta onde administradores colocam arquivos (`.ogg`, `.wav`, `.mp3`) a serem importados.
-* `voice-control/resourcepack/` - Pasta de trabalho utilizada para gerar a estrutura do resource pack.
-  * `build/` - Contém o arquivo final `voicecontrol-pack.zip`.
-  * `cache/` - Pasta de cache temporário.
-* `voice-control/logs/` - Pasta contendo os logs administrativos do mod (`admin.log`).
+  * `players/<nick>/<data>/<sessao>/` - Gravações de microfone individuais de players (`mic.mp3` ou `mic.wav`, `mic.json` de metadados e `mic.sha256`).
+  * `monitors/<nick>/<data>/<sessao>/` - Gravações de áudio mixadas do que um jogador ouviu. Também contém a subpasta `speakers/<speakerNick>/` com a faixa separada de cada falante.
+* `voice-control/imported-audios/` - Pasta onde administradores colocam arquivos de áudio (`.ogg`, `.wav`, `.mp3`) a serem importados.
+* `voice-control/transcoded-cache/` - Pasta contendo cache de transcriação (arquivos convertidos).
+* `voice-control/logs/` - Logs administrativos do mod (`admin.log`).
+
+### Cliente:
+* `voice-control/cache/` - Contém arquivos de áudio `.ogg` baixados do servidor e o manifest de cache local (`manifest.json`), indexados por SHA-256.
 
 ---
 
 ## 💬 Comandos
 
-Todos os comandos exigem permissão de operador de nível configurável (padrão: 3).
+Todos os comandos exigem nível de permissão de operador de nível configurável (padrão: 3).
 
-### Sistema de Gravação
-* `/voicectl rec mic start <player>` - Inicia a gravação direta do microfone do jogador informado.
-* `/voicectl rec mic start all` - Inicia a gravação direta do microfone de todos os jogadores online (e ativa auto-gravação para novos jogadores se configurado).
-* `/voicectl rec mic stop <player>` - Para a gravação direta do microfone do jogador informado.
+### 1. Sistema de Gravação (`/voicectl rec`)
+* `/voicectl rec mic start <player>` - Inicia a gravação direta do microfone do jogador.
+* `/voicectl rec mic start all` - Inicia a gravação de todos os jogadores online.
+* `/voicectl rec mic stop <player>` - Para a gravação do microfone do jogador.
 * `/voicectl rec mic stop all` - Para a gravação de todos os jogadores ativos.
-* `/voicectl rec monitor start <player>` - Inicia a gravação monitorada (grava tudo o que o jogador/admin escuta, gerando faixas mixadas e individuais por falante).
-* `/voicectl rec monitor stop <player>` - Interrompe a gravação monitorada do jogador informado.
-* `/voicectl rec status` - Mostra a lista de todas as sessões de gravação ativas.
+* `/voicectl rec monitor start <player>` - Inicia gravação monitorada do que o jogador/admin escuta.
+* `/voicectl rec monitor stop <player>` - Para a gravação monitorada do jogador.
+* `/voicectl rec status` - Mostra a lista de sessões de gravação ativas.
 
-### Sistema de Áudio Importado
-* `/voicectl audio reload` - Escaneia `voice-control/imported-audios/`, higieniza nomes, converte MP3/WAV para OGG se necessário, gera os arquivos `pack.mcmeta` e `sounds.json` e monta o resource pack `.zip`.
+### 2. Sincronização e Catálogo (`/voicectl audio`)
+* `/voicectl audio reload` - Escaneia a pasta de importação, transcodifica se necessário, atualiza o manifest do servidor e notifica os clientes prontos para atualizar/baixar.
 * `/voicectl audio list` - Lista todos os IDs de sons registrados no servidor.
-* `/voicectl audio info <name>` - Mostra os detalhes de um áudio importado específico (caminho físico, tamanho, hash).
+* `/voicectl audio info <sound>` - Exibe detalhes de um áudio importado específico (nome, caminho, tamanho, SHA-256).
+* `/voicectl audio sync <player>` - Sincroniza o catálogo de áudios com um jogador específico (se o companion dele estiver ativo).
+* `/voicectl audio sync all` - Sincroniza o catálogo com todos os jogadores online que têm o companion ativo.
 
-### Sistema de Resource Pack
-* `/voicectl pack build` - Compacta e gera manualmente o resource pack `voicecontrol-pack.zip` e recalcula o hash.
-* `/voicectl pack push` - Envia o pacote de recursos a todos os jogadores online usando pacotes vanilla.
-* `/voicectl pack status` - Mostra o status do servidor HTTP interno do mod e o hash SHA-1 do pack atual.
+### 3. Motor de Áudio Dinâmico Client-Side (`/voicectl playsound` & `/voicectl stopsound`)
+Estes comandos tocam e param áudios diretamente no hardware de som do cliente através de OpenAL, baixando os arquivos em chunks automaticamente se faltarem em cache.
 
----
+* `/voicectl playsound <sound> <source> <targets> [pos] [volume] [pitch] [minVolume]`
+  * Toca um som dinâmico personalizado. Se posicional, acompanha as coordenadas informadas 3D espacialmente.
+  * *Alias:* `/vcplaysound ...`
+* `/voicectl stopsound <targets> [source] [sound]`
+  * Interrompe a execução dos sons dinâmicos nos alvos informados. Se `source` (categoria) ou `sound` (ID) forem informados, filtra para parar apenas os correspondentes.
+  * *Alias:* `/vcstopsound ...`
 
-## 🔊 Exemplos de `/playsound`
+### 4. Motor de Reprodução Simple Voice Chat (`/voicectl voiceplay` & `/voicectl voicestop`)
+Estes comandos transmitem os áudios importados decodificados em PCM como transmissões de microfone dentro do voice chat posicional ou estático.
 
-Uma vez que o áudio tenha sido carregado e o resource pack aplicado ao jogador, você pode reproduzir os áudios importados usando o comando vanilla do Minecraft:
-
-* Se você colocou o arquivo `Boss Fala 1.mp3` na pasta de importação, ele é normalizado como `boss_fala_1` sob o namespace padrão `voicecontrol`.
-* Para tocar o áudio para todos os jogadores:
-  `/playsound voicecontrol:boss_fala_1 voice @a`
-* Para tocar o áudio para um jogador específico na posição dele:
-  `/playsound voicecontrol:boss_fala_1 voice playername ~ ~ ~`
-
----
-
-## 🛜 Envio do Resource Pack e Servidor HTTP Interno
-
-O mod possui um servidor HTTP interno leve embutido. Ele escuta na porta padrão `8087` (configurável) para servir o arquivo `voicecontrol-pack.zip`.
-
-### Fluxo Recomendado de Atualização de Sons:
-1. Coloque os novos arquivos de áudio na pasta `voice-control/imported-audios/`.
-2. Execute o comando `/voicectl audio reload`. (O mod faz a conversão OGG, gera a estrutura e reconstrói o ZIP automaticamente).
-3. Execute o comando `/voicectl pack push`. (O mod envia um pacote de recursos informando a URL e o novo Hash SHA-1. Os jogadores online aceitam/baixam o pack imediatamente).
-4. Utilize o comando `/playsound voicecontrol:nome_do_som ...` para reproduzir.
-
-### Configuração de IP/URL Pública:
-Se o seu servidor Minecraft possui um IP público ou domínio, você deve configurar o parâmetro `publicUrl` em `config/voicecontrol-server.toml` para que os clientes consigam se conectar à porta HTTP. Exemplo:
-```toml
-publicUrl = "http://meuserver.com:8087/voicecontrol-pack.zip"
-```
-Por padrão, se `publicUrl` estiver vazio, o comando `/voicectl pack push` irá falhar com um erro. Se você deseja forçar a detecção automática baseada no IP de rede local do servidor (por exemplo, em ambiente de teste local), defina `allowLocalIpAutoDetect = true` no arquivo de configuração do servidor.
+* `/voicectl voiceplay <sound> <targets>` - Transmite o áudio de forma estática 2D diretamente aos targets informados no voice chat.
+* `/voicectl voiceplay <sound> at <x> <y> <z>` - Transmite o áudio de forma posicional 3D a partir das coordenadas informadas.
+* `/voicectl voiceplay <sound> from <entity>` - Transmite o áudio posicional 3D a partir da entidade especificada.
+* `/voicectl voiceplay stop <sound>` - Para a transmissão de voz de um som específico.
+* `/voicectl voicestop <sound>` - Para a transmissão de voz de um som específico (principal).
+* `/voicectl voicestop all` - Interrompe imediatamente todas as transmissões ativas via Voice Chat.
+* *Alias:* `/vcvoicestop <sound|all>` - Alias para interromper transmissões via Voice Chat.
 
 ---
 
-## ⚙️ Configuração Padrão (`config/voicecontrol-server.toml`)
+## ⚙️ Configurações (`config/voicecontrol-server.toml`)
 
-O arquivo é gerado no diretório `config/` do seu servidor:
+O arquivo de configuração é gerado na primeira execução do servidor:
 
 ```toml
 [recording]
@@ -116,7 +110,7 @@ O arquivo é gerado no diretório `config/` do seu servidor:
     enabled = true
     # Formato padrão de saída das gravações (mp3 ou wav)
     defaultFormat = "mp3"
-    # Formato de fallback caso o encoder MP3 falhe
+    # Formato de fallback caso o encoder padrão falhe
     fallbackFormat = "wav"
     # Salvar metadados JSON das gravações
     saveMetadata = true
@@ -128,61 +122,62 @@ O arquivo é gerado no diretório `config/` do seu servidor:
     autoRecordNewPlayersWhenAll = true
     # Duração máxima de gravação em minutos (0 para desativar limite)
     maxRecordingMinutes = 60
+    # Organizar gravações em pastas estruturadas por data/sessão
+    organizeByDateAndSession = true
+    # Padrão da pasta de data
+    dateFolderPattern = "dd-MM-yyyy"
+    # Padrão da pasta de sessão
+    sessionFolderPattern = "dd-MM-yyyy_HH-mm-ss"
 
 [commands]
-    # Nível de permissão necessário para usar os comandos do mod (op nível 3 ou 4)
+    # Nível de permissão OP necessário para rodar comandos
     permissionLevel = 3
 
-[audioImport]
-    # Ativar sistema de importação de áudios
+[audioLibrary]
+    # Ativa/Desativa o catálogo de áudios importados
     enabled = true
-    # Pasta contendo os arquivos a serem importados
-    inputFolder = "voice-control/imported-audios"
-    # Namespace ResourceLocation para os sons registrados
-    namespace = "voicecontrol"
-    # Tentar converter arquivos mp3/wav automaticamente para ogg usando ffmpeg
-    convertToOgg = true
+    # Nome da subpasta de importações dentro de voice-control/ (Ex: imported-audios)
+    importFolder = "imported-audios"
+    # Permitir conversão automática de MP3/WAV para OGG usando FFmpeg no servidor
+    allowMp3WavTranscode = true
+    # Caminho opcional do executável FFmpeg
+    ffmpegPath = ""
+    # Enviar catálogo (manifest) automaticamente quando o jogador conecta
+    syncOnPlayerJoin = true
+    # Re-sincronizar catálogo quando o reload do áudio for chamado
+    syncOnAudioReload = true
+    # Tamanho máximo de pacote de rede de transferência (em bytes)
+    maxChunkSizeBytes = 32768
+    # Tamanho máximo do arquivo físico importado aceitável (em MB)
+    maxAudioFileSizeMb = 20
+    # Extensões permitidas para importação
+    allowedExtensions = ["ogg", "wav", "mp3"]
 
-[resourcePack]
-    # Ativar geração do resource pack
-    resourcePackEnabled = true
-    # Reconstruir o zip do resource pack automaticamente ao rodar audio reload
-    autoBuildOnReload = true
-    # Iniciar servidor HTTP interno para servir o pack
-    internalHttpServer = true
-    # Porta do servidor HTTP interno
-    httpPort = 8087
-    # URL de download pública do resource pack (obrigatório para push, a menos que allowLocalIpAutoDetect seja true)
-    publicUrl = ""
-    # Permitir auto-detecção do IP local se a publicUrl estiver vazia (útil em testes locais, mas não recomendado para produção)
-    allowLocalIpAutoDetect = false
-    # Se os jogadores devem obrigatoriamente instalar o pacote para jogar
-    required = false
+[dynamicSound]
+    # Ativar motor de áudio dinâmico client-side
+    enabled = true
+    # Ativar gravação e carregamento de arquivos locais no cliente
+    clientCacheEnabled = true
+    # Volume padrão inicial
+    defaultVolume = 1.0
+    # Pitch padrão inicial
+    defaultPitch = 1.0
+    # Limite máximo de canais de som tocando simultaneamente no cliente
+    maxConcurrentSounds = 32
+    # Pre-download de todos os arquivos no carregamento do mundo
+    preloadOnJoin = false
+    # Executar áudio automaticamente ao concluir o download caso estivesse ausente
+    playAfterDownloadIfMissing = true
+
+[voicePlayback]
+    # Ativar motor de transmissão no Simple Voice Chat
+    enabled = true
+    # Distância máxima de alcance padrão do som de voz (em blocos)
+    defaultDistance = 48
+    # Volume da transmissão padrão
+    defaultVolume = 1.0
+    # Duração máxima limite de áudio transmitido em segundos
+    maxDurationSeconds = 120
+    # Decodificar PCM completo para RAM ao realizar reload (evita decodificações em runtime)
+    preDecodePcmOnReload = false
 ```
-
----
-
-## 📄 Exemplo de `sounds.json` Gerado
-
-```json
-{
-  "boss_fala_1": {
-    "sounds": [
-      "boss_fala_1"
-    ]
-  },
-  "evento_intro": {
-    "sounds": [
-      "evento_intro"
-    ]
-  }
-}
-```
-
----
-
-## ⚠️ Limitações Conhecidas e Status Experimental
-
-1. **Dependência do FFmpeg para Transcodificação**: O Java nativo não possui codificadores de OGG Vorbis internos. O mod busca a chamada `ffmpeg` no PATH do sistema. Sem ele instalado no servidor host, apenas arquivos `.ogg` pré-convertidos colocados manualmente serão aceitos na pasta `imported-audios`.
-2. **Natives do LAME MP3**: O codificador de MP3 integrado usa a biblioteca nativa `Lame4J` provida pelo Simple Voice Chat. Em plataformas host raras ou não suportadas (como servidores baseados em processadores ARM antigos ou sem GLIBC atualizados no Linux), a inicialização do codificador MP3 pode falhar com erros JNI. O mod detecta e ativa o fallback automático para áudio bruto **WAV** sem travar o servidor.
-3. **Status Experimental do Modo Monitor**: A gravação em modo monitor (`/voicectl rec monitor`) é considerada **experimental** até testes reais massivos com múltiplos players. Dependendo da taxa de atualização e limitações da API do Simple Voice Chat, pode haver variações ou pequenos atrasos de sincronização, distância/posicionamento e na identificação individual dos falantes.

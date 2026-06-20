@@ -271,16 +271,40 @@ public class VoiceChatPlaybackEngine {
 
 
 
-    public static void stopSound(String soundId) {
+    public static boolean stopSound(String soundId) {
         List<AudioPlayer> players = activePlayers.get(soundId);
-        if (players != null) {
+        if (players != null && !players.isEmpty()) {
+            List<AudioPlayer> toStop;
             synchronized (players) {
-                for (AudioPlayer player : players) {
-                    player.stopPlaying();
-                }
+                toStop = new ArrayList<>(players);
                 players.clear();
             }
+            for (AudioPlayer player : toStop) {
+                try {
+                    player.stopPlaying();
+                } catch (Exception ignored) {}
+            }
             activePlayers.remove(soundId);
+            return true;
+        }
+        return false;
+    }
+
+    public static void stopAll() {
+        List<AudioPlayer> toStop = new ArrayList<>();
+        for (List<AudioPlayer> players : activePlayers.values()) {
+            if (players != null) {
+                synchronized (players) {
+                    toStop.addAll(players);
+                    players.clear();
+                }
+            }
+        }
+        activePlayers.clear();
+        for (AudioPlayer player : toStop) {
+            try {
+                player.stopPlaying();
+            } catch (Exception ignored) {}
         }
     }
 

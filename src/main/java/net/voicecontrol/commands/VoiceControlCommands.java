@@ -149,7 +149,25 @@ public class VoiceControlCommands {
                                 .executes(context -> playVoiceEntity(context.getSource(), ResourceLocationArgument.getId(context, "sound"), EntityArgument.getEntity(context, "entity")))
                             )
                         )
-
+                    )
+                )
+                .then(Commands.literal("stopsound")
+                    .then(Commands.argument("targets", EntityArgument.players())
+                        .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), null, null))
+                        .then(Commands.argument("source", StringArgumentType.word()).suggests(SUGGEST_SOURCES)
+                            .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), StringArgumentType.getString(context, "source"), null))
+                            .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
+                                .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), StringArgumentType.getString(context, "source"), ResourceLocationArgument.getId(context, "sound")))
+                            )
+                        )
+                    )
+                )
+                .then(Commands.literal("voicestop")
+                    .then(Commands.literal("all")
+                        .executes(context -> voiceStopAll(context.getSource()))
+                    )
+                    .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
+                        .executes(context -> voiceStopSound(context.getSource(), ResourceLocationArgument.getId(context, "sound")))
                     )
                 )
         );
@@ -176,6 +194,33 @@ public class VoiceControlCommands {
                             )
                         )
                     )
+                )
+        );
+
+        // Alias /vcstopsound
+        dispatcher.register(
+            Commands.literal("vcstopsound")
+                .requires(source -> source.hasPermission(Config.SERVER.commandsPermissionLevel.get()))
+                .then(Commands.argument("targets", EntityArgument.players())
+                    .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), null, null))
+                    .then(Commands.argument("source", StringArgumentType.word()).suggests(SUGGEST_SOURCES)
+                        .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), StringArgumentType.getString(context, "source"), null))
+                        .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
+                            .executes(context -> stopSoundCommand(context.getSource(), EntityArgument.getPlayers(context, "targets"), StringArgumentType.getString(context, "source"), ResourceLocationArgument.getId(context, "sound")))
+                        )
+                    )
+                )
+        );
+
+        // Alias /vcvoicestop
+        dispatcher.register(
+            Commands.literal("vcvoicestop")
+                .requires(source -> source.hasPermission(Config.SERVER.commandsPermissionLevel.get()))
+                .then(Commands.literal("all")
+                    .executes(context -> voiceStopAll(context.getSource()))
+                )
+                .then(Commands.argument("sound", ResourceLocationArgument.id()).suggests(SUGGEST_SOUNDS)
+                    .executes(context -> voiceStopSound(context.getSource(), ResourceLocationArgument.getId(context, "sound")))
                 )
         );
     }
@@ -441,14 +486,69 @@ public class VoiceControlCommands {
 
 
     private static int stopVoicePlay(CommandSourceStack source, ResourceLocation soundLoc) {
-        String soundId = resolveSoundId(soundLoc);
-        if (soundId == null) {
-            source.sendFailure(Component.literal("§c[VoiceControl] Som '" + soundLoc + "' não encontrado na biblioteca."));
-            return 1;
+        return voiceStopSound(source, soundLoc);
+    }
+
+    private static int stopSoundCommand(CommandSourceStack source, Collection<ServerPlayer> targets, String sourceCategory, ResourceLocation soundLoc) {
+        String soundId = null;
+        if (soundLoc != null) {
+            soundId = resolveSoundId(soundLoc);
+            if (soundId == null) {
+                soundId = soundLoc.toString();
+            }
         }
 
-        VoiceChatPlaybackEngine.stopSound(soundId);
-        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Interrompida reprodução de '" + soundId + "' via Voice Chat."), false);
+        String finalCategory = null;
+        if (sourceCategory != null) {
+            SoundSource category = SoundSource.MASTER;
+            try {
+                category = SoundSource.valueOf(sourceCategory.toUpperCase());
+                finalCategory = category.getName();
+            } catch (IllegalArgumentException ignored) {
+                finalCategory = sourceCategory;
+            }
+        }
+
+        int sent = 0;
+        for (ServerPlayer target : targets) {
+            if (AudioImportManager.isPlayerReady(target)) {
+                net.voicecontrol.network.packets.DynamicSoundStopPacket packet = new net.voicecontrol.network.packets.DynamicSoundStopPacket(soundId, finalCategory);
+                VoiceControlNetwork.sendToClient(packet, target);
+                sent++;
+            } else {
+                source.sendSystemMessage(Component.literal("§c[VoiceControl] O jogador " + target.getGameProfile().getName() + " não possui o client companion pronto. Stopsound não enviado."));
+            }
+        }
+
+        final int finalSent = sent;
+        if (finalSent > 0) {
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Stopsound enviado para " + finalSent + " jogador(es)."), false);
+        } else {
+            source.sendSuccess(() -> Component.literal("§c[VoiceControl] Nenhum jogador recebeu o stopsound."), false);
+        }
+
+        return 1;
+    }
+
+    private static int voiceStopSound(CommandSourceStack source, ResourceLocation soundLoc) {
+        String soundId = resolveSoundId(soundLoc);
+        if (soundId == null) {
+            soundId = soundLoc.toString();
+        }
+
+        boolean stopped = VoiceChatPlaybackEngine.stopSound(soundId);
+        final String finalId = soundId;
+        if (stopped) {
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Reprodução via Voice Chat de '" + finalId + "' interrompida."), false);
+        } else {
+            source.sendFailure(Component.literal("§c[VoiceControl] Nenhuma reprodução ativa encontrada para '" + finalId + "'."));
+        }
+        return 1;
+    }
+
+    private static int voiceStopAll(CommandSourceStack source) {
+        VoiceChatPlaybackEngine.stopAll();
+        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Todas as reproduções via Voice Chat foram interrompidas."), false);
         return 1;
     }
 }
