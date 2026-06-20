@@ -513,9 +513,13 @@ public class DynamicClientSoundEngine {
                 Vec3 pos = camera.getPosition();
                 org.joml.Vector3f look = camera.getLookVector();
                 org.joml.Vector3f up = camera.getUpVector();
-                AL10.alListener3f(AL10.AL_POSITION, (float) pos.x, (float) pos.y, (float) pos.z);
-                float[] orientation = new float[]{look.x, look.y, look.z, up.x, up.y, up.z};
-                AL10.alListenerfv(AL10.AL_ORIENTATION, orientation);
+                try {
+                    AL10.alListener3f(AL10.AL_POSITION, (float) pos.x, (float) pos.y, (float) pos.z);
+                    float[] orientation = new float[]{look.x, look.y, look.z, up.x, up.y, up.z};
+                    AL10.alListenerfv(AL10.AL_ORIENTATION, orientation);
+                } catch (Throwable t) {
+                    AdminLogger.error("CLIENT", "Failed to update OpenAL listener position/orientation: " + t.getMessage());
+                }
             }
         }
 
