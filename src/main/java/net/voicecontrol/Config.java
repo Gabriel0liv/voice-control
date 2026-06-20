@@ -108,7 +108,7 @@ public class Config {
                     .define("enabled", true);
             audioLibraryImportFolder = builder
                     .comment("Folder containing custom audio to import")
-                    .define("importFolder", "voice-control/imported-audios");
+                    .define("importFolder", "imported-audios");
             audioLibraryAllowMp3WavTranscode = builder
                     .comment("Allow automatic transcoding of wav/mp3 to ogg using ffmpeg")
                     .define("allowMp3WavTranscode", true);

@@ -119,6 +119,11 @@ public class VoiceChatPlaybackEngine {
     }
 
     public static boolean playStatic(String soundId, List<ServerPlayer> targets, CommandSourceStack source) {
+        if (!OggConverter.isFFmpegAvailable()) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Voiceplay precisa de FFmpeg no servidor para converter áudio para PCM 48kHz mono. Configure audioLibrary.ffmpegPath ou instale ffmpeg."));
+            return false;
+        }
+
         VoicechatServerApi api = VoiceControlVoicePlugin.getServerApi();
         if (api == null) {
             source.sendFailure(Component.literal("§c[VoiceControl] Simple Voice Chat API não inicializada."));
@@ -172,6 +177,11 @@ public class VoiceChatPlaybackEngine {
     }
 
     public static boolean playLocational(String soundId, ServerLevel level, double x, double y, double z, CommandSourceStack source) {
+        if (!OggConverter.isFFmpegAvailable()) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Voiceplay precisa de FFmpeg no servidor para converter áudio para PCM 48kHz mono. Configure audioLibrary.ffmpegPath ou instale ffmpeg."));
+            return false;
+        }
+
         VoicechatServerApi api = VoiceControlVoicePlugin.getServerApi();
         if (api == null) {
             source.sendFailure(Component.literal("§c[VoiceControl] Simple Voice Chat API não inicializada."));
@@ -214,6 +224,11 @@ public class VoiceChatPlaybackEngine {
     }
 
     public static boolean playEntity(String soundId, Entity entity, CommandSourceStack source) {
+        if (!OggConverter.isFFmpegAvailable()) {
+            source.sendFailure(Component.literal("§c[VoiceControl] Voiceplay precisa de FFmpeg no servidor para converter áudio para PCM 48kHz mono. Configure audioLibrary.ffmpegPath ou instale ffmpeg."));
+            return false;
+        }
+
         VoicechatServerApi api = VoiceControlVoicePlugin.getServerApi();
         if (api == null) {
             source.sendFailure(Component.literal("§c[VoiceControl] Simple Voice Chat API não inicializada."));
@@ -254,12 +269,7 @@ public class VoiceChatPlaybackEngine {
         return true;
     }
 
-    public static boolean playAsPlayerFromEntity(String soundId, ServerPlayer voiceIdentity, Entity entity, CommandSourceStack source) {
-        // SVC createEntityAudioChannel binds the sound to the location of the entity.
-        // In the current SVC API design, we can attach the channel directly to the entity.
-        // We will stream the audio coming from the entity.
-        return playEntity(soundId, entity, source);
-    }
+
 
     public static void stopSound(String soundId) {
         List<AudioPlayer> players = activePlayers.get(soundId);

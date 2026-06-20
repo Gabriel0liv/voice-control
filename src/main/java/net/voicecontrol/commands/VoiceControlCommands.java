@@ -149,15 +149,7 @@ public class VoiceControlCommands {
                                 .executes(context -> playVoiceEntity(context.getSource(), ResourceLocationArgument.getId(context, "sound"), EntityArgument.getEntity(context, "entity")))
                             )
                         )
-                        .then(Commands.literal("as")
-                            .then(Commands.argument("player", EntityArgument.player())
-                                .then(Commands.literal("from")
-                                    .then(Commands.argument("entity", EntityArgument.entity())
-                                        .executes(context -> playVoiceAsPlayer(context.getSource(), ResourceLocationArgument.getId(context, "sound"), EntityArgument.getPlayer(context, "player"), EntityArgument.getEntity(context, "entity")))
-                                    )
-                                )
-                            )
-                        )
+
                     )
                 )
         );
@@ -316,18 +308,36 @@ public class VoiceControlCommands {
     }
 
     private static int syncAudioAll(CommandSourceStack source) {
+        int sent = 0;
+        int skipped = 0;
         for (ServerPlayer player : source.getServer().getPlayerList().getPlayers()) {
-            AudioImportManager.registerReadyPlayer(player);
+            if (AudioImportManager.isPlayerReady(player)) {
+                AudioImportManager.sendManifestIfReady(player);
+                sent++;
+            } else {
+                skipped++;
+            }
         }
-        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Enviado manifest para sincronização com todos os jogadores online."), false);
+        final int finalSent = sent;
+        final int finalSkipped = skipped;
+        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Manifest enviado para " + finalSent + " jogador(es). " + finalSkipped + " jogador(es) ignorados porque não têm VoiceControl client pronto."), false);
         return 1;
     }
 
     private static int syncAudioPlayer(CommandSourceStack source, Collection<ServerPlayer> targets) {
+        int sent = 0;
         for (ServerPlayer player : targets) {
-            AudioImportManager.registerReadyPlayer(player);
+            if (AudioImportManager.isPlayerReady(player)) {
+                AudioImportManager.sendManifestIfReady(player);
+                sent++;
+            } else {
+                source.sendSystemMessage(Component.literal("§c[VoiceControl] " + player.getGameProfile().getName() + " não está pronto (não possui o client companion ativo)."));
+            }
         }
-        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Enviado manifest para sincronização com " + targets.size() + " jogador(es)."), false);
+        final int finalSent = sent;
+        if (finalSent > 0) {
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Enviado manifest para sincronização com " + finalSent + " jogador(es)."), false);
+        }
         return 1;
     }
 
@@ -352,21 +362,33 @@ public class VoiceControlCommands {
         float pit = pitch != null ? pitch : 1.0f;
         float minVol = minVolume != null ? minVolume : 0.0f;
 
-        // Verify client companion status and log warning
+        List<ServerPlayer> readyTargets = new ArrayList<>();
         for (ServerPlayer target : targets) {
-            if (!AudioImportManager.isPlayerReady(target)) {
-                source.sendSystemMessage(Component.literal("§6[VoiceControl] Aviso: O jogador " + target.getGameProfile().getName() + " não possui o client-companion pronto."));
-            } else if (!AudioImportManager.isSoundCachedForPlayer(target, soundId)) {
-                source.sendSystemMessage(Component.literal("§6[VoiceControl] Aviso: O jogador " + target.getGameProfile().getName() + " não tem o som '" + soundId + "' em cache. Enviando solicitação de sincronização..."));
+            if (AudioImportManager.isPlayerReady(target)) {
+                boolean cached = AudioImportManager.isSoundCachedForPlayer(target, soundId);
+                boolean playAfterDownload = Config.SERVER.dynamicSoundPlayAfterDownloadIfMissing.get();
+                if (cached) {
+                    readyTargets.add(target);
+                } else {
+                    if (playAfterDownload) {
+                        readyTargets.add(target);
+                        source.sendSystemMessage(Component.literal("§e[VoiceControl] Aviso: " + target.getGameProfile().getName() + " não tem o som '" + soundId + "' em cache. O cliente vai baixar e tocar assim que terminar."));
+                    } else {
+                        source.sendSystemMessage(Component.literal("§c[VoiceControl] " + target.getGameProfile().getName() + " não tem '" + soundId + "' em cache. Execute /voicectl audio sync " + target.getGameProfile().getName() + "."));
+                    }
+                }
+            } else {
+                source.sendSystemMessage(Component.literal("§c[VoiceControl] O jogador " + target.getGameProfile().getName() + " não possui o client-companion pronto."));
             }
         }
 
-        DynamicSoundPlayPacket packet = new DynamicSoundPlayPacket(soundId, category.getName(), positional, x, y, z, vol, pit, minVol, 1.0f);
-        for (ServerPlayer target : targets) {
-            VoiceControlNetwork.sendToClient(packet, target);
+        if (!readyTargets.isEmpty()) {
+            DynamicSoundPlayPacket packet = new DynamicSoundPlayPacket(soundId, category.getName(), positional, x, y, z, vol, pit, minVol, 1.0f);
+            for (ServerPlayer target : readyTargets) {
+                VoiceControlNetwork.sendToClient(packet, target);
+            }
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Comando de reprodução de som '" + soundId + "' enviado para " + readyTargets.size() + " jogador(es)."), false);
         }
-
-        source.sendSuccess(() -> Component.literal("§a[VoiceControl] Comando de reprodução de som '" + soundId + "' enviado para " + targets.size() + " jogador(es)."), false);
         return 1;
     }
 
@@ -414,19 +436,7 @@ public class VoiceControlCommands {
         return 1;
     }
 
-    private static int playVoiceAsPlayer(CommandSourceStack source, ResourceLocation soundLoc, ServerPlayer player, Entity entity) {
-        String soundId = resolveSoundId(soundLoc);
-        if (soundId == null) {
-            source.sendFailure(Component.literal("§c[VoiceControl] Som '" + soundLoc + "' não encontrado na biblioteca."));
-            return 1;
-        }
 
-        boolean success = VoiceChatPlaybackEngine.playAsPlayerFromEntity(soundId, player, entity, source);
-        if (success) {
-            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Iniciada reprodução via Voice Chat (simulando " + player.getGameProfile().getName() + ") de '" + soundId + "' a partir de " + entity.getDisplayName().getString() + "."), false);
-        }
-        return 1;
-    }
 
     private static int stopVoicePlay(CommandSourceStack source, ResourceLocation soundLoc) {
         String soundId = resolveSoundId(soundLoc);

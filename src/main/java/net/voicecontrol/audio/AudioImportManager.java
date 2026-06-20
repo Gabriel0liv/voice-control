@@ -274,14 +274,7 @@ public class AudioImportManager {
                 int readBytes;
 
                 while ((readBytes = fis.read(buffer)) > 0) {
-                    byte[] chunkData;
-                    if (readBytes == maxChunkSize) {
-                        chunkData = buffer;
-                    } else {
-                        chunkData = new byte[readBytes];
-                        System.arraycopy(buffer, 0, chunkData, 0, readBytes);
-                    }
-
+                    byte[] chunkData = java.util.Arrays.copyOf(buffer, readBytes);
                     VoiceControlNetwork.sendToClient(new AudioChunkPacket(soundId, sha256, chunkIndex, totalChunks, chunkData), player);
                     chunkIndex++;
                     
@@ -306,6 +299,36 @@ public class AudioImportManager {
 
     public static boolean isPlayerReady(ServerPlayer player) {
         return readyPlayers.contains(player);
+    }
+
+    public static int sendManifestIfReady(ServerPlayer player) {
+        if (isPlayerReady(player)) {
+            sendManifestToPlayer(player);
+            return 1;
+        }
+        return 0;
+    }
+
+    public static int sendManifestToReadyPlayers(Collection<ServerPlayer> players) {
+        int count = 0;
+        for (ServerPlayer player : players) {
+            if (isPlayerReady(player)) {
+                sendManifestToPlayer(player);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static int broadcastManifestToReadyPlayersPublic() {
+        int count = 0;
+        List<AudioManifestPacket.ManifestEntry> entries = buildManifestEntries();
+        AudioManifestPacket packet = new AudioManifestPacket(entries);
+        for (ServerPlayer player : readyPlayers) {
+            VoiceControlNetwork.sendToClient(packet, player);
+            count++;
+        }
+        return count;
     }
 
     public static boolean isSoundCachedForPlayer(ServerPlayer player, String soundId) {

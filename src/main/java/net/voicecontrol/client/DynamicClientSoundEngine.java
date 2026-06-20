@@ -1,6 +1,7 @@
 package net.voicecontrol.client;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.sounds.SoundSource;
 import net.voicecontrol.Config;
 import net.voicecontrol.logging.AdminLogger;
@@ -33,7 +34,8 @@ public class DynamicClientSoundEngine {
     });
 
     private static File cacheDir;
-    private static Map<String, String> clientManifest = new ConcurrentHashMap<>(); // soundId -> sha256
+    private static final Map<String, String> serverManifest = new ConcurrentHashMap<>(); // soundId -> sha256
+    private static final Map<String, String> cachedManifest = new ConcurrentHashMap<>(); // soundId -> sha256
     private static final Map<String, FileSyncTask> activeDownloads = new ConcurrentHashMap<>();
 
     // Keep track of active OpenAL sources
@@ -44,15 +46,39 @@ public class DynamicClientSoundEngine {
     public static class FileSyncTask {
         public final String soundId;
         public final String sha256;
-        public final int totalChunks;
-        public final byte[][] chunks;
+        private int totalChunks = -1;
+        private byte[][] chunks;
         private final List<Runnable> runAfterSync = new ArrayList<>();
 
-        public FileSyncTask(String soundId, String sha256, int totalChunks) {
+        public FileSyncTask(String soundId, String sha256) {
             this.soundId = soundId;
             this.sha256 = sha256;
-            this.totalChunks = totalChunks;
-            this.chunks = new byte[totalChunks][];
+        }
+
+        public synchronized void initializeChunks(int totalChunks) {
+            if (this.chunks == null) {
+                this.totalChunks = totalChunks;
+                this.chunks = new byte[totalChunks][];
+            }
+        }
+
+        public synchronized void putChunk(int chunkIndex, int totalChunks, byte[] data) {
+            initializeChunks(totalChunks);
+            if (chunkIndex >= 0 && chunkIndex < this.totalChunks) {
+                this.chunks[chunkIndex] = data;
+            }
+        }
+
+        public synchronized byte[][] getChunks() {
+            return chunks;
+        }
+
+        public synchronized boolean isComplete() {
+            if (chunks == null) return false;
+            for (byte[] chunk : chunks) {
+                if (chunk == null) return false;
+            }
+            return true;
         }
 
         public synchronized void addCallback(Runnable runnable) {
@@ -61,7 +87,11 @@ public class DynamicClientSoundEngine {
 
         public synchronized void triggerCallbacks() {
             for (Runnable runnable : runAfterSync) {
-                runnable.run();
+                try {
+                    runnable.run();
+                } catch (Exception e) {
+                    AdminLogger.error("CLIENT", "Error executing sync callback: " + e.getMessage());
+                }
             }
         }
     }
@@ -103,12 +133,15 @@ public class DynamicClientSoundEngine {
     }
 
     private static void loadManifest() {
+        if (!Config.SERVER.dynamicSoundClientCacheEnabled.get()) {
+            return;
+        }
         File manifestFile = new File(cacheDir, "manifest.json");
         if (manifestFile.exists()) {
             try (FileReader reader = new FileReader(manifestFile)) {
                 Map<String, String> loaded = GSON.fromJson(reader, new TypeToken<Map<String, String>>(){}.getType());
                 if (loaded != null) {
-                    clientManifest.putAll(loaded);
+                    cachedManifest.putAll(loaded);
                 }
             } catch (Exception e) {
                 AdminLogger.error("CLIENT", "Failed to load client manifest: " + e.getMessage());
@@ -117,77 +150,145 @@ public class DynamicClientSoundEngine {
     }
 
     public static void saveManifest() {
+        if (!Config.SERVER.dynamicSoundClientCacheEnabled.get()) {
+            return;
+        }
         File manifestFile = new File(cacheDir, "manifest.json");
         try (FileWriter writer = new FileWriter(manifestFile)) {
-            GSON.toJson(clientManifest, writer);
+            GSON.toJson(cachedManifest, writer);
         } catch (Exception e) {
             AdminLogger.error("CLIENT", "Failed to save client manifest: " + e.getMessage());
         }
     }
 
     public static Map<String, String> getClientManifest() {
-        return clientManifest;
+        return cachedManifest;
     }
 
-    public static void updateManifestFromServer(Map<String, String> serverManifest) {
-        clientManifest.clear();
-        clientManifest.putAll(serverManifest);
-        saveManifest();
-
-        // Check which sounds are missing or have mismatched files in cache
-        for (Map.Entry<String, String> entry : clientManifest.entrySet()) {
-            String soundId = entry.getKey();
-            String sha256 = entry.getValue();
-            File cachedFile = new File(cacheDir, sha256 + ".ogg");
-            if (!cachedFile.exists()) {
-                requestSync(soundId, sha256);
+    private static String calculateSHA256(byte[] data) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(data);
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
             }
+            return hexString.toString();
+        } catch (Exception e) {
+            AdminLogger.error("CLIENT", "Failed to compute SHA-256 for bytes: " + e.getMessage());
+            return "";
         }
     }
 
+    private static String calculateSHA256(File file) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(file)) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = fis.read(buffer)) > 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            byte[] hash = digest.digest();
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (Exception e) {
+            AdminLogger.error("CLIENT", "Failed to compute SHA-256 for file: " + e.getMessage());
+            return "";
+        }
+    }
+
+    public static void updateManifestFromServer(Map<String, String> newServerManifest) {
+        serverManifest.clear();
+        serverManifest.putAll(newServerManifest);
+
+        cachedManifest.clear();
+
+        if (!Config.SERVER.dynamicSoundClientCacheEnabled.get()) {
+            return;
+        }
+
+        for (Map.Entry<String, String> entry : serverManifest.entrySet()) {
+            String soundId = entry.getKey();
+            String sha256 = entry.getValue();
+            File cachedFile = getCachedFile(sha256);
+            if (cachedFile.exists() && calculateSHA256(cachedFile).equalsIgnoreCase(sha256)) {
+                cachedManifest.put(soundId, sha256);
+            } else {
+                requestSync(soundId, sha256);
+            }
+        }
+        saveManifest();
+    }
+
     public static void requestSync(String soundId, String sha256) {
+        if (!Config.SERVER.dynamicSoundClientCacheEnabled.get()) {
+            return;
+        }
         if (activeDownloads.containsKey(sha256)) return;
-        activeDownloads.put(sha256, new FileSyncTask(soundId, sha256, 0));
+        activeDownloads.put(sha256, new FileSyncTask(soundId, sha256));
         VoiceControlNetwork.sendToServer(new AudioRequestPacket(soundId, sha256));
     }
 
     public static void handleChunk(String soundId, String sha256, int chunkIndex, int totalChunks, byte[] data) {
-        FileSyncTask task = activeDownloads.computeIfAbsent(sha256, s -> new FileSyncTask(soundId, sha256, totalChunks));
-        if (task.chunks.length != totalChunks) {
-            // Re-allocate if totalChunks was initialized as 0
-            activeDownloads.put(sha256, new FileSyncTask(soundId, sha256, totalChunks));
-            task = activeDownloads.get(sha256);
+        if (!Config.SERVER.dynamicSoundClientCacheEnabled.get()) {
+            return;
         }
-        if (chunkIndex >= 0 && chunkIndex < totalChunks) {
-            task.chunks[chunkIndex] = data;
-        }
+        FileSyncTask task = activeDownloads.computeIfAbsent(sha256, s -> new FileSyncTask(soundId, sha256));
+        task.putChunk(chunkIndex, totalChunks, data);
     }
 
     public static void handleSyncComplete(String soundId, String sha256, boolean success) {
         FileSyncTask task = activeDownloads.remove(sha256);
-        if (task == null || !success) {
-            AdminLogger.error("CLIENT", "Failed to sync sound file " + soundId);
+        if (task == null) {
+            AdminLogger.error("CLIENT", "No sync task found for sound: " + soundId);
+            return;
+        }
+
+        if (!success || !task.isComplete()) {
+            AdminLogger.error("CLIENT", "Failed to sync sound file " + soundId + " (success=" + success + ", complete=" + (task.isComplete()) + ")");
+            VoiceControlNetwork.sendToServer(new net.voicecontrol.network.packets.AudioClientSyncStatusPacket(soundId, sha256, false));
             return;
         }
 
         // Assemble chunks
-        File cachedFile = new File(cacheDir, sha256 + ".ogg");
+        File cachedFile = getCachedFile(sha256);
         try {
+            byte[][] chunks = task.getChunks();
             int totalSize = 0;
-            for (byte[] chunk : task.chunks) {
+            for (byte[] chunk : chunks) {
                 if (chunk != null) totalSize += chunk.length;
             }
             byte[] completeFile = new byte[totalSize];
             int offset = 0;
-            for (byte[] chunk : task.chunks) {
+            for (byte[] chunk : chunks) {
                 if (chunk != null) {
                     System.arraycopy(chunk, 0, completeFile, offset, chunk.length);
                     offset += chunk.length;
                 }
             }
 
+            // Local SHA-256 validation
+            String calculatedSha = calculateSHA256(completeFile);
+            if (!calculatedSha.equalsIgnoreCase(sha256)) {
+                AdminLogger.error("CLIENT", "SHA-256 verification failed for " + soundId + ". Expected: " + sha256 + ", Got: " + calculatedSha);
+                if (cachedFile.exists()) {
+                    cachedFile.delete();
+                }
+                VoiceControlNetwork.sendToServer(new net.voicecontrol.network.packets.AudioClientSyncStatusPacket(soundId, sha256, false));
+                return;
+            }
+
             java.nio.file.Files.write(cachedFile.toPath(), completeFile);
-            clientManifest.put(soundId, sha256);
+            cachedManifest.put(soundId, sha256);
             saveManifest();
             AdminLogger.info("CLIENT", "Successfully synchronized and cached sound: " + soundId);
             
@@ -195,27 +296,48 @@ public class DynamicClientSoundEngine {
             task.triggerCallbacks();
         } catch (IOException e) {
             AdminLogger.error("CLIENT", "Failed to save synchronized sound " + soundId + ": " + e.getMessage());
+            VoiceControlNetwork.sendToServer(new net.voicecontrol.network.packets.AudioClientSyncStatusPacket(soundId, sha256, false));
         }
     }
 
     public static void playSound(String soundId, String sourceCategory, boolean positional, double x, double y, double z, float volume, float pitch, float minVolume, float attenuation) {
         if (!Config.SERVER.dynamicSoundEnabled.get()) return;
 
-        String sha256 = clientManifest.get(soundId);
+        String sha256 = serverManifest.get(soundId);
+        if (sha256 == null) {
+            sha256 = cachedManifest.get(soundId);
+        }
         if (sha256 == null) {
             AdminLogger.warn("CLIENT", "Sound not in manifest: " + soundId);
             return;
         }
 
-        File cachedFile = new File(cacheDir, sha256 + ".ogg");
-        if (!cachedFile.exists()) {
+        File cachedFile = getCachedFile(sha256);
+        boolean fileExists = cachedFile.exists();
+
+        boolean isCached = false;
+        if (!Config.SERVER.dynamicSoundClientCacheEnabled.get()) {
+            if (fileExists) {
+                isCached = true;
+            } else {
+                AdminLogger.warn("CLIENT", "Cache is disabled and file does not exist: " + soundId);
+                return;
+            }
+        } else {
+            isCached = cachedManifest.containsKey(soundId) && fileExists;
+        }
+
+        if (!isCached) {
             if (Config.SERVER.dynamicSoundPlayAfterDownloadIfMissing.get()) {
                 FileSyncTask download = activeDownloads.get(sha256);
                 if (download != null) {
                     download.addCallback(() -> playSound(soundId, sourceCategory, positional, x, y, z, volume, pitch, minVolume, attenuation));
                 } else {
                     requestSync(soundId, sha256);
-                    activeDownloads.get(sha256).addCallback(() -> playSound(soundId, sourceCategory, positional, x, y, z, volume, pitch, minVolume, attenuation));
+                    FileSyncTask newTask = activeDownloads.get(sha256);
+                    if (newTask != null) {
+                        newTask.addCallback(() -> playSound(soundId, sourceCategory, positional, x, y, z, volume, pitch, minVolume, attenuation));
+                    }
                 }
             } else {
                 requestSync(soundId, sha256);
@@ -241,6 +363,19 @@ public class DynamicClientSoundEngine {
     }
 
     private static void triggerOpenALPlay(String soundId, String sourceCategory, PCMData pcm, boolean positional, double x, double y, double z, float volume, float pitch, float minVolume, float attenuation) {
+        // Ensure concurrent sound limit is respected
+        int maxConcurrent = Config.SERVER.dynamicSoundMaxConcurrentSounds.get();
+        synchronized (playingSounds) {
+            while (playingSounds.size() >= maxConcurrent && !playingSounds.isEmpty()) {
+                PlayingSound oldest = playingSounds.remove(0);
+                try {
+                    AL10.alSourceStop(oldest.alSourceId);
+                    AL10.alDeleteSources(oldest.alSourceId);
+                    AL10.alDeleteBuffers(oldest.alBufferId);
+                } catch (Exception ignored) {}
+            }
+        }
+
         int bufferId = AL10.alGenBuffers();
         int format = (pcm.channels == 1) ? AL10.AL_FORMAT_MONO16 : AL10.AL_FORMAT_STEREO16;
         
@@ -315,6 +450,20 @@ public class DynamicClientSoundEngine {
         Runnable task;
         while ((task = mainThreadQueue.poll()) != null) {
             task.run();
+        }
+
+        // Update listener position & orientation relative to camera
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level != null && mc.gameRenderer != null) {
+            net.minecraft.client.Camera camera = mc.gameRenderer.getMainCamera();
+            if (camera.isInitialized()) {
+                Vec3 pos = camera.getPosition();
+                org.joml.Vector3f look = camera.getLookVector();
+                org.joml.Vector3f up = camera.getUpVector();
+                AL10.alListener3f(AL10.AL_POSITION, (float) pos.x, (float) pos.y, (float) pos.z);
+                float[] orientation = new float[]{look.x, look.y, look.z, up.x, up.y, up.z};
+                AL10.alListenerfv(AL10.AL_ORIENTATION, orientation);
+            }
         }
 
         // Clean up playing sounds that have finished

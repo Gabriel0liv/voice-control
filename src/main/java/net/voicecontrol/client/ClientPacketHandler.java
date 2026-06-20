@@ -4,7 +4,6 @@ import net.voicecontrol.network.VoiceControlNetwork;
 import net.voicecontrol.network.packets.AudioClientSyncStatusPacket;
 import net.voicecontrol.network.packets.AudioManifestPacket;
 
-import java.io.File;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,12 +21,8 @@ public class ClientPacketHandler {
         
         // Check local files and report status
         for (AudioManifestPacket.ManifestEntry entry : entries) {
-            File cachedFile = DynamicClientSoundEngine.getCachedFile(entry.sha256);
-            if (cachedFile.exists()) {
+            if (DynamicClientSoundEngine.getClientManifest().containsKey(entry.id)) {
                 VoiceControlNetwork.sendToServer(new AudioClientSyncStatusPacket(entry.id, entry.sha256, true));
-            } else {
-                // If not cached, we already requestSync in updateManifestFromServer, but we can also do it here if needed.
-                // DynamicClientSoundEngine.updateManifestFromServer already triggers requestSync.
             }
         }
     }
