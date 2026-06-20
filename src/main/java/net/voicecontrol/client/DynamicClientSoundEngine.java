@@ -105,6 +105,7 @@ public class DynamicClientSoundEngine {
         final double x, y, z;
         final float baseVolume;
         final float minVolume;
+        int stoppedTicks = 0;
 
         PlayingSound(String soundId, String sourceCategory, int alSourceId, int alBufferId, boolean positional, double x, double y, double z, float baseVolume, float minVolume) {
             this.soundId = soundId;
@@ -117,6 +118,59 @@ public class DynamicClientSoundEngine {
             this.z = z;
             this.baseVolume = baseVolume;
             this.minVolume = minVolume;
+        }
+    }
+
+    private static void clearOpenALErrors(String context) {
+        try {
+            int error;
+            while ((error = AL10.alGetError()) != AL10.AL_NO_ERROR) {
+                AdminLogger.warn("CLIENT", "Cleared OpenAL error before " + context + ": 0x" + Integer.toHexString(error));
+            }
+        } catch (Throwable t) {
+            AdminLogger.error("CLIENT", "Failed to clear OpenAL errors for " + context + ": " + t.getMessage());
+        }
+    }
+
+    private static boolean checkOpenALError(String context) {
+        try {
+            int error = AL10.alGetError();
+            if (error != AL10.AL_NO_ERROR) {
+                AdminLogger.error("CLIENT", "OpenAL error detected in " + context + ": 0x" + Integer.toHexString(error));
+                return true;
+            }
+        } catch (Throwable t) {
+            AdminLogger.error("CLIENT", "Failed to check OpenAL error for " + context + ": " + t.getMessage());
+        }
+        return false;
+    }
+
+    private static void safeStopAndDelete(PlayingSound sound) {
+        try {
+            clearOpenALErrors("cleanup " + sound.soundId);
+
+            if (AL10.alIsSource(sound.alSourceId)) {
+                try {
+                    AL10.alSourceStop(sound.alSourceId);
+                    AL10.alSourcei(sound.alSourceId, AL10.AL_BUFFER, 0);
+                    AL10.alDeleteSources(sound.alSourceId);
+                } catch (Throwable t) {
+                    AdminLogger.error("CLIENT", "Failed deleting OpenAL source for " + sound.soundId + ": " + t.getMessage());
+                }
+            }
+
+            if (AL10.alIsBuffer(sound.alBufferId)) {
+                try {
+                    AL10.alDeleteBuffers(sound.alBufferId);
+                } catch (Throwable t) {
+                    AdminLogger.error("CLIENT", "Failed deleting OpenAL buffer for " + sound.soundId + ": " + t.getMessage());
+                }
+            }
+
+            checkOpenALError("cleanup " + sound.soundId);
+            AdminLogger.info("CLIENT", "[VoiceControl] OpenAL cleanup completed: sound=" + sound.soundId);
+        } catch (Throwable t) {
+            AdminLogger.error("CLIENT", "OpenAL cleanup crashed safely for " + sound.soundId + ": " + t.getMessage());
         }
     }
 
@@ -372,11 +426,7 @@ public class DynamicClientSoundEngine {
         synchronized (playingSounds) {
             while (playingSounds.size() >= maxConcurrent && !playingSounds.isEmpty()) {
                 PlayingSound oldest = playingSounds.remove(0);
-                try {
-                    AL10.alSourceStop(oldest.alSourceId);
-                    AL10.alDeleteSources(oldest.alSourceId);
-                    AL10.alDeleteBuffers(oldest.alBufferId);
-                } catch (Exception ignored) {}
+                safeStopAndDelete(oldest);
             }
         }
 
@@ -412,6 +462,7 @@ public class DynamicClientSoundEngine {
         AL10.alSourcef(sourceId, AL10.AL_GAIN, finalVolume);
 
         AL10.alSourcePlay(sourceId);
+        AdminLogger.info("CLIENT", "[VoiceControl] OpenAL play started: sound=" + soundId + ", source=" + sourceId + ", buffer=" + bufferId);
 
         PlayingSound sound = new PlayingSound(soundId, sourceCategory, sourceId, bufferId, positional, x, y, z, volume, minVolume);
         playingSounds.add(sound);
@@ -426,9 +477,7 @@ public class DynamicClientSoundEngine {
                 boolean matchCategory = (category == null || sound.sourceCategory.equalsIgnoreCase(category));
                 
                 if (matchSound && matchCategory) {
-                    AL10.alSourceStop(sound.alSourceId);
-                    AL10.alDeleteSources(sound.alSourceId);
-                    AL10.alDeleteBuffers(sound.alBufferId);
+                    safeStopAndDelete(sound);
                     it.remove();
                 }
             }
@@ -475,11 +524,37 @@ public class DynamicClientSoundEngine {
             Iterator<PlayingSound> it = playingSounds.iterator();
             while (it.hasNext()) {
                 PlayingSound sound = it.next();
-                int state = AL10.alGetSourcei(sound.alSourceId, AL10.AL_SOURCE_STATE);
-                if (state == AL10.AL_STOPPED) {
-                    AL10.alDeleteSources(sound.alSourceId);
-                    AL10.alDeleteBuffers(sound.alBufferId);
+                if (!AL10.alIsSource(sound.alSourceId)) {
                     it.remove();
+                    continue;
+                }
+
+                int state;
+                try {
+                    state = AL10.alGetSourcei(sound.alSourceId, AL10.AL_SOURCE_STATE);
+                } catch (Throwable t) {
+                    AdminLogger.error("CLIENT", "Failed reading OpenAL source state for " + sound.soundId + ": " + t.getMessage());
+                    safeStopAndDelete(sound);
+                    it.remove();
+                    continue;
+                }
+
+                if (state == AL10.AL_STOPPED) {
+                    if (sound.stoppedTicks == 0) {
+                        AdminLogger.info("CLIENT", "[VoiceControl] OpenAL sound stopped naturally: sound=" + sound.soundId + ", source=" + sound.alSourceId + ", buffer=" + sound.alBufferId);
+                    }
+                    if (Config.SERVER.dynamicSoundDebugDisableOpenALCleanup.get()) {
+                        AdminLogger.warn("CLIENT", "[VoiceControl] OpenAL cleanup skipped by debug config: sound=" + sound.soundId);
+                        it.remove();
+                        continue;
+                    }
+                    sound.stoppedTicks++;
+                    if (sound.stoppedTicks >= 20) {
+                        safeStopAndDelete(sound);
+                        it.remove();
+                    }
+                } else {
+                    sound.stoppedTicks = 0;
                 }
             }
         }
@@ -489,9 +564,7 @@ public class DynamicClientSoundEngine {
         mainThreadQueue.clear();
         synchronized (playingSounds) {
             for (PlayingSound sound : playingSounds) {
-                AL10.alSourceStop(sound.alSourceId);
-                AL10.alDeleteSources(sound.alSourceId);
-                AL10.alDeleteBuffers(sound.alBufferId);
+                safeStopAndDelete(sound);
             }
             playingSounds.clear();
         }

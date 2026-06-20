@@ -51,6 +51,7 @@ public class Config {
         public final ForgeConfigSpec.IntValue dynamicSoundMaxConcurrentSounds;
         public final ForgeConfigSpec.BooleanValue dynamicSoundPreloadOnJoin;
         public final ForgeConfigSpec.BooleanValue dynamicSoundPlayAfterDownloadIfMissing;
+        public final ForgeConfigSpec.BooleanValue dynamicSoundDebugDisableOpenALCleanup;
 
         // Voice Playback configurations
         public final ForgeConfigSpec.BooleanValue voicePlaybackEnabled;
@@ -154,6 +155,9 @@ public class Config {
             dynamicSoundPlayAfterDownloadIfMissing = builder
                     .comment("Play a sound immediately after downloading if it was requested but missing")
                     .define("playAfterDownloadIfMissing", true);
+            dynamicSoundDebugDisableOpenALCleanup = builder
+                    .comment("Debug mode: disable OpenAL resource cleanup upon completion")
+                    .define("debugDisableOpenALCleanup", false);
             builder.pop();
 
             builder.push("voicePlayback");
