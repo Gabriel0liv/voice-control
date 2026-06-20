@@ -174,6 +174,23 @@ public class DynamicClientSoundEngine {
         }
     }
 
+    private static float calculateEffectiveVolume(PlayingSound sound) {
+        float masterVol = getCategoryVolume("master");
+        float categoryVol = getCategoryVolume(sound.sourceCategory);
+
+        if (sound.baseVolume <= 0.0f || masterVol <= 0.0f || categoryVol <= 0.0f) {
+            return 0.0f;
+        }
+
+        float finalVolume = sound.baseVolume * masterVol * categoryVol;
+
+        if (sound.minVolume > 0.0f && finalVolume < sound.minVolume) {
+            finalVolume = sound.minVolume;
+        }
+
+        return finalVolume;
+    }
+
     public static void init(File gameDir) {
         cacheDir = new File(gameDir, "voice-control/cache");
         if (!cacheDir.exists()) {
@@ -453,18 +470,16 @@ public class DynamicClientSoundEngine {
         }
 
         // Apply combined volumes
-        float categoryVol = getCategoryVolume(sourceCategory);
+        PlayingSound sound = new PlayingSound(soundId, sourceCategory, sourceId, bufferId, positional, x, y, z, volume, minVolume);
         float masterVol = getCategoryVolume("master");
-        float finalVolume = volume * categoryVol * masterVol;
-        if (finalVolume < minVolume) {
-            finalVolume = minVolume;
-        }
-        AL10.alSourcef(sourceId, AL10.AL_GAIN, finalVolume);
+        float categoryVol = getCategoryVolume(sourceCategory);
+        float effectiveVolume = calculateEffectiveVolume(sound);
+        AL10.alSourcef(sourceId, AL10.AL_GAIN, effectiveVolume);
 
         AL10.alSourcePlay(sourceId);
         AdminLogger.info("CLIENT", "[VoiceControl] OpenAL play started: sound=" + soundId + ", source=" + sourceId + ", buffer=" + bufferId);
+        AdminLogger.info("CLIENT", "[VoiceControl] Volume resolved: sound=" + soundId + ", category=" + sourceCategory + ", base=" + volume + ", master=" + masterVol + ", categoryVolume=" + categoryVol + ", min=" + minVolume + ", final=" + effectiveVolume);
 
-        PlayingSound sound = new PlayingSound(soundId, sourceCategory, sourceId, bufferId, positional, x, y, z, volume, minVolume);
         playingSounds.add(sound);
     }
 
@@ -486,14 +501,15 @@ public class DynamicClientSoundEngine {
 
     public static void updateVolumeSettings() {
         synchronized (playingSounds) {
-            float masterVol = getCategoryVolume("master");
             for (PlayingSound sound : playingSounds) {
-                float categoryVol = getCategoryVolume(sound.sourceCategory);
-                float finalVolume = sound.baseVolume * categoryVol * masterVol;
-                if (finalVolume < sound.minVolume) {
-                    finalVolume = sound.minVolume;
+                try {
+                    if (AL10.alIsSource(sound.alSourceId)) {
+                        float effectiveVolume = calculateEffectiveVolume(sound);
+                        AL10.alSourcef(sound.alSourceId, AL10.AL_GAIN, effectiveVolume);
+                    }
+                } catch (Throwable t) {
+                    AdminLogger.error("CLIENT", "Failed to update OpenAL volume in updateVolumeSettings for " + sound.soundId + ": " + t.getMessage());
                 }
-                AL10.alSourcef(sound.alSourceId, AL10.AL_GAIN, finalVolume);
             }
         }
     }
@@ -562,6 +578,20 @@ public class DynamicClientSoundEngine {
                 }
             }
         }
+
+        // Update volumes/gains of all active playing sounds
+        synchronized (playingSounds) {
+            for (PlayingSound sound : playingSounds) {
+                try {
+                    if (AL10.alIsSource(sound.alSourceId)) {
+                        float effectiveVolume = calculateEffectiveVolume(sound);
+                        AL10.alSourcef(sound.alSourceId, AL10.AL_GAIN, effectiveVolume);
+                    }
+                } catch (Throwable t) {
+                    AdminLogger.error("CLIENT", "Failed to update OpenAL volume for " + sound.soundId + ": " + t.getMessage());
+                }
+            }
+        }
     }
 
     public static void cleanup() {
@@ -576,10 +606,15 @@ public class DynamicClientSoundEngine {
 
     private static float getCategoryVolume(String categoryName) {
         try {
-            SoundSource source = SoundSource.valueOf(categoryName.toUpperCase());
+            SoundSource source = SoundSource.valueOf(categoryName.toUpperCase(Locale.ROOT));
             return Minecraft.getInstance().options.getSoundSourceVolume(source);
         } catch (IllegalArgumentException e) {
-            return 1.0f;
+            AdminLogger.warn("CLIENT", "Unknown sound category '" + categoryName + "', falling back to master volume.");
+            try {
+                return Minecraft.getInstance().options.getSoundSourceVolume(SoundSource.MASTER);
+            } catch (Exception ex) {
+                return 1.0f;
+            }
         }
     }
 
