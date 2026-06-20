@@ -52,6 +52,8 @@ public class Config {
         public final ForgeConfigSpec.BooleanValue dynamicSoundPreloadOnJoin;
         public final ForgeConfigSpec.BooleanValue dynamicSoundPlayAfterDownloadIfMissing;
         public final ForgeConfigSpec.BooleanValue dynamicSoundDebugDisableOpenALCleanup;
+        public final ForgeConfigSpec.IntValue dynamicSoundDedupeWindowTicks;
+        public final ForgeConfigSpec.BooleanValue dynamicSoundStopExistingIdenticalBeforePlay;
 
         // Voice Playback configurations
         public final ForgeConfigSpec.BooleanValue voicePlaybackEnabled;
@@ -158,6 +160,12 @@ public class Config {
             dynamicSoundDebugDisableOpenALCleanup = builder
                     .comment("Debug mode: disable OpenAL resource cleanup upon completion")
                     .define("debugDisableOpenALCleanup", false);
+            dynamicSoundDedupeWindowTicks = builder
+                    .comment("Number of ticks during which identical playsound commands are considered duplicates and ignored. Use 0 to disable.")
+                    .defineInRange("dedupeWindowTicks", 10, 0, 1200);
+            dynamicSoundStopExistingIdenticalBeforePlay = builder
+                    .comment("If true, stop any existing identical sound before starting a new one to avoid overlay.")
+                    .define("stopExistingIdenticalBeforePlay", true);
             builder.pop();
 
             builder.push("voicePlayback");

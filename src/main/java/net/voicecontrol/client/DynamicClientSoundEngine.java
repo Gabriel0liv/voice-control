@@ -42,6 +42,7 @@ public class DynamicClientSoundEngine {
     private static final List<PlayingSound> playingSounds = Collections.synchronizedList(new ArrayList<>());
     // Main thread execution queue
     private static final Queue<Runnable> mainThreadQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private static final Map<String, Long> RECENT_CLIENT_PLAYS = new ConcurrentHashMap<>();
 
     public static class FileSyncTask {
         public final String soundId;
@@ -378,6 +379,19 @@ public class DynamicClientSoundEngine {
     public static void playSound(String soundId, String sourceCategory, boolean positional, double x, double y, double z, float volume, float pitch, float minVolume, float attenuation) {
         if (!Config.SERVER.dynamicSoundEnabled.get()) return;
 
+        // Client-side deduplication check
+        int dedupeWindow = Config.SERVER.dynamicSoundDedupeWindowTicks.get();
+        if (dedupeWindow > 0) {
+            long now = (Minecraft.getInstance().level != null) ? Minecraft.getInstance().level.getGameTime() : (System.currentTimeMillis() / 50L);
+            String key = soundId + "_" + sourceCategory + "_" + positional + "_" + x + "_" + y + "_" + z;
+            Long lastPlay = RECENT_CLIENT_PLAYS.get(key);
+            if (lastPlay != null && (now - lastPlay) < dedupeWindow) {
+                AdminLogger.warn("CLIENT", "[VoiceControl] Duplicate playsound ignored client-side: sound=" + soundId + ", category=" + sourceCategory);
+                return;
+            }
+            RECENT_CLIENT_PLAYS.put(key, now);
+        }
+
         String sha256 = serverManifest.get(soundId);
         if (sha256 == null) {
             sha256 = cachedManifest.get(soundId);
@@ -438,6 +452,27 @@ public class DynamicClientSoundEngine {
     }
 
     private static void triggerOpenALPlay(String soundId, String sourceCategory, PCMData pcm, boolean positional, double x, double y, double z, float volume, float pitch, float minVolume, float attenuation) {
+        // Stop existing identical sound if configured
+        if (Config.SERVER.dynamicSoundStopExistingIdenticalBeforePlay.get()) {
+            synchronized (playingSounds) {
+                Iterator<PlayingSound> it = playingSounds.iterator();
+                while (it.hasNext()) {
+                    PlayingSound existing = it.next();
+                    boolean matches = existing.soundId.equalsIgnoreCase(soundId)
+                            && existing.sourceCategory.equalsIgnoreCase(sourceCategory)
+                            && existing.positional == positional;
+                    if (matches && positional) {
+                        matches = (existing.x == x && existing.y == y && existing.z == z);
+                    }
+                    if (matches) {
+                        AdminLogger.info("CLIENT", "[VoiceControl] Stopped existing identical sound before replay: sound=" + soundId);
+                        safeStopAndDelete(existing);
+                        it.remove();
+                    }
+                }
+            }
+        }
+
         // Ensure concurrent sound limit is respected
         int maxConcurrent = Config.SERVER.dynamicSoundMaxConcurrentSounds.get();
         synchronized (playingSounds) {

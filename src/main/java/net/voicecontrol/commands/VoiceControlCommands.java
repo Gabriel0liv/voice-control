@@ -18,6 +18,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 import net.voicecontrol.Config;
+import net.voicecontrol.logging.AdminLogger;
 import net.voicecontrol.audio.AudioImportManager;
 import net.voicecontrol.audio.VoiceChatPlaybackEngine;
 import net.voicecontrol.network.VoiceControlNetwork;
@@ -46,6 +47,8 @@ public class VoiceControlCommands {
     public static final SuggestionProvider<CommandSourceStack> SUGGEST_SOURCES = (context, builder) -> {
         return SharedSuggestionProvider.suggest(List.of("master", "music", "record", "weather", "block", "hostile", "neutral", "player", "ambient", "voice"), builder);
     };
+
+    private static final Map<String, Long> RECENT_PLAYSOUND_REQUESTS = new java.util.concurrent.ConcurrentHashMap<>();
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(
@@ -379,11 +382,30 @@ public class VoiceControlCommands {
         }
 
         if (!readyTargets.isEmpty()) {
+            long now = source.getServer().getTickCount();
+            int dedupeWindow = Config.SERVER.dynamicSoundDedupeWindowTicks.get();
             DynamicSoundPlayPacket packet = new DynamicSoundPlayPacket(soundId, category.getName(), positional, x, y, z, vol, pit, minVol, 1.0f);
+            
             for (ServerPlayer target : readyTargets) {
-                VoiceControlNetwork.sendToClient(packet, target);
+                boolean duplicate = false;
+                if (dedupeWindow > 0) {
+                    String key = target.getUUID().toString() + "_" + soundId + "_" + category.getName() + "_" + positional + "_" + x + "_" + y + "_" + z;
+                    Long lastPlay = RECENT_PLAYSOUND_REQUESTS.get(key);
+                    if (lastPlay != null && (now - lastPlay) < dedupeWindow) {
+                        duplicate = true;
+                    } else {
+                        RECENT_PLAYSOUND_REQUESTS.put(key, now);
+                    }
+                }
+                
+                if (duplicate) {
+                    AdminLogger.warn("SERVER", "[VoiceControl] Duplicate playsound ignored server-side: sound=" + soundId + ", target=" + target.getGameProfile().getName() + ", category=" + category.getName());
+                } else {
+                    VoiceControlNetwork.sendToClient(packet, target);
+                    AdminLogger.info("SERVER", "[VoiceControl] Playsound sent: sound=" + soundId + ", target=" + target.getGameProfile().getName() + ", category=" + category.getName());
+                }
             }
-            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Comando de reprodução de som '" + soundId + "' enviado para " + readyTargets.size() + " jogador(es)."), false);
+            source.sendSuccess(() -> Component.literal("§a[VoiceControl] Comando de reprodução de som '" + soundId + "' enviado para os jogadores aptos."), false);
         }
         return 1;
     }

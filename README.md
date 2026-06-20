@@ -168,6 +168,10 @@ O arquivo de configuração é gerado na primeira execução do servidor:
     preloadOnJoin = false
     # Executar áudio automaticamente ao concluir o download caso estivesse ausente
     playAfterDownloadIfMissing = true
+    # Número de ticks para deduplicar e ignorar comandos playsound idênticos (0 para desativar)
+    dedupeWindowTicks = 10
+    # Parar instâncias idênticas em execução antes de reiniciar o áudio no cliente
+    stopExistingIdenticalBeforePlay = true
 
 [voicePlayback]
     # Ativar motor de transmissão no Simple Voice Chat
