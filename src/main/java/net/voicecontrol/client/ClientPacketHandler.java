@@ -32,8 +32,8 @@ public class ClientPacketHandler {
     }
 
     public static void handleSyncComplete(String soundId, String sha256, boolean success) {
-        DynamicClientSoundEngine.handleSyncComplete(soundId, sha256, success);
-        VoiceControlNetwork.sendToServer(new AudioClientSyncStatusPacket(soundId, sha256, success));
+        boolean cached = DynamicClientSoundEngine.handleSyncComplete(soundId, sha256, success);
+        VoiceControlNetwork.sendToServer(new AudioClientSyncStatusPacket(soundId, sha256, cached));
     }
 
     public static void handlePlaySound(String soundId, String source, boolean positional, double x, double y, double z, float volume, float pitch, float minVolume, float attenuation) {

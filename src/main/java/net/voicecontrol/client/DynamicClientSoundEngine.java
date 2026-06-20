@@ -246,17 +246,21 @@ public class DynamicClientSoundEngine {
         task.putChunk(chunkIndex, totalChunks, data);
     }
 
-    public static void handleSyncComplete(String soundId, String sha256, boolean success) {
+    public static boolean handleSyncComplete(String soundId, String sha256, boolean success) {
+        if (!Config.SERVER.dynamicSoundClientCacheEnabled.get()) {
+            AdminLogger.warn("CLIENT", "Ignoring sync complete because dynamic sound client cache is disabled.");
+            return false;
+        }
+
         FileSyncTask task = activeDownloads.remove(sha256);
         if (task == null) {
             AdminLogger.error("CLIENT", "No sync task found for sound: " + soundId);
-            return;
+            return false;
         }
 
         if (!success || !task.isComplete()) {
             AdminLogger.error("CLIENT", "Failed to sync sound file " + soundId + " (success=" + success + ", complete=" + (task.isComplete()) + ")");
-            VoiceControlNetwork.sendToServer(new net.voicecontrol.network.packets.AudioClientSyncStatusPacket(soundId, sha256, false));
-            return;
+            return false;
         }
 
         // Assemble chunks
@@ -283,8 +287,7 @@ public class DynamicClientSoundEngine {
                 if (cachedFile.exists()) {
                     cachedFile.delete();
                 }
-                VoiceControlNetwork.sendToServer(new net.voicecontrol.network.packets.AudioClientSyncStatusPacket(soundId, sha256, false));
-                return;
+                return false;
             }
 
             java.nio.file.Files.write(cachedFile.toPath(), completeFile);
@@ -294,9 +297,10 @@ public class DynamicClientSoundEngine {
             
             // Trigger playback if requested during sync
             task.triggerCallbacks();
+            return true;
         } catch (IOException e) {
             AdminLogger.error("CLIENT", "Failed to save synchronized sound " + soundId + ": " + e.getMessage());
-            VoiceControlNetwork.sendToServer(new net.voicecontrol.network.packets.AudioClientSyncStatusPacket(soundId, sha256, false));
+            return false;
         }
     }
 

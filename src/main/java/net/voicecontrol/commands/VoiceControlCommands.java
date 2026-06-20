@@ -337,6 +337,8 @@ public class VoiceControlCommands {
         final int finalSent = sent;
         if (finalSent > 0) {
             source.sendSuccess(() -> Component.literal("§a[VoiceControl] Enviado manifest para sincronização com " + finalSent + " jogador(es)."), false);
+        } else {
+            source.sendSuccess(() -> Component.literal("§c[VoiceControl] Nenhum jogador recebeu manifest. Todos os alvos estavam sem VoiceControl client pronto."), false);
         }
         return 1;
     }

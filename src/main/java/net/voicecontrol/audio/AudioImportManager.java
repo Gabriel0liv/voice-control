@@ -50,6 +50,16 @@ public class AudioImportManager {
         String operator = source != null ? source.getTextName() : "SYSTEM";
         AdminLogger.info(operator, "Initiating custom audios reload asynchronously...");
 
+        String configuredImportFolder = Config.SERVER.audioLibraryImportFolder.get();
+        if (configuredImportFolder.replace("\\", "/").startsWith("voice-control/")) {
+            String warn = "[VoiceControl] audioLibrary.importFolder está configurado como '" + configuredImportFolder + 
+                "', mas agora deve ser relativo à pasta voice-control. Use 'imported-audios' para evitar voice-control/voice-control/imported-audios.";
+            AdminLogger.warn(operator, warn);
+            if (source != null) {
+                source.sendSystemMessage(Component.literal("§e" + warn));
+            }
+        }
+
         if (source != null) {
             source.sendSystemMessage(Component.literal("§e[VoiceControl] Iniciando importação e conversão de áudios em segundo plano..."));
         }
@@ -220,7 +230,9 @@ public class AudioImportManager {
 
     public static void registerReadyPlayer(ServerPlayer player) {
         readyPlayers.add(player);
-        sendManifestToPlayer(player);
+        if (Config.SERVER.audioLibrarySyncOnPlayerJoin.get()) {
+            sendManifestToPlayer(player);
+        }
     }
 
     public static void handlePlayerLeave(ServerPlayer player) {
